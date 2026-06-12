@@ -53,10 +53,9 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Patch Android SDK versions
+      - name: Patch variables.gradle
         run: |
-          # Fix variables.gradle to use correct SDK versions
-          cat > android/variables.gradle << 'VAREOF'
+          cat > android/variables.gradle << 'EOF'
           ext {
               minSdkVersion = 22
               compileSdkVersion = 35
@@ -72,15 +71,28 @@ jobs:
               androidxJunitVersion = '1.2.1'
               androidxEspressoCoreVersion = '3.6.1'
               cordovaAndroidVersion = '10.1.1'
+              kotlin_version = '1.9.25'
           }
-          VAREOF
-          echo "variables.gradle patched"
-          cat android/variables.gradle
+          EOF
+
+      - name: Fix Kotlin stdlib duplicate classes
+        run: |
+          # Append resolution strategy to app/build.gradle to force single kotlin-stdlib version
+          cat >> android/app/build.gradle << 'EOF'
+
+          configurations.all {
+              resolutionStrategy {
+                  force "org.jetbrains.kotlin:kotlin-stdlib:1.9.25"
+                  force "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.25"
+                  force "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.25"
+              }
+          }
+          EOF
 
       - name: Accept SDK licenses
         run: yes | sdkmanager --licenses || true
 
-      - name: Install required SDK
+      - name: Install required SDK platform
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" || true
 
       - name: Build debug APK
@@ -99,8 +111,8 @@ jobs:
           retention-days: 7
 
       - name: Upload APK on success
-        if: success()
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: iTRADE-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
