@@ -33,42 +33,46 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Capacitor
-        run: |
-          npm install @capacitor/core @capacitor/cli @capacitor/android
+        run: npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Init & sync Capacitor
+      - name: Write Capacitor config
         run: |
-          # Create capacitor.config.ts manually to avoid interactive prompt
-          cat > capacitor.config.ts << 'CAPEOF'
-          import { CapacitorConfig } from '@capacitor/cli';
-          const config: CapacitorConfig = {
-            appId: 'com.noctisi9.itrade',
-            appName: 'iTRADE',
-            webDir: 'dist',
-            server: {
-              androidScheme: 'https'
+          cat > capacitor.config.json << 'CAPEOF'
+          {
+            "appId": "com.noctisi9.itrade",
+            "appName": "iTRADE",
+            "webDir": "dist",
+            "server": {
+              "androidScheme": "https"
             }
-          };
-          export default config;
+          }
           CAPEOF
 
+      - name: Add Android & sync
+        run: |
           npx cap add android
           npx cap sync android
 
-      - name: Set Gradle wrapper permissions
-        run: chmod +x android/gradlew
-
-      - name: Accept Android licenses
+      - name: Accept SDK licenses
         run: yes | sdkmanager --licenses || true
 
-      - name: Build debug APK
+      - name: Build debug APK (capture output)
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME }}
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/gradle-output.txt
+          exit ${PIPESTATUS[0]}
 
-      - name: Upload APK
+      - name: Upload gradle log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-error-log
+          path: /tmp/gradle-output.txt
+          retention-days: 7
+
+      - name: Upload APK on success
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: iTRADE-debug
