@@ -53,16 +53,53 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Patch Android SDK versions
+        run: |
+          # Fix variables.gradle to use correct SDK versions
+          cat > android/variables.gradle << 'VAREOF'
+          ext {
+              minSdkVersion = 22
+              compileSdkVersion = 35
+              targetSdkVersion = 34
+              androidxActivityVersion = '1.9.0'
+              androidxAppCompatVersion = '1.7.0'
+              androidxCoordinatorLayoutVersion = '1.2.0'
+              androidxCoreVersion = '1.15.0'
+              androidxFragmentVersion = '1.8.3'
+              coreSplashScreenVersion = '1.0.1'
+              androidxWebkitVersion = '1.12.1'
+              junitVersion = '4.13.2'
+              androidxJunitVersion = '1.2.1'
+              androidxEspressoCoreVersion = '3.6.1'
+              cordovaAndroidVersion = '10.1.1'
+          }
+          VAREOF
+          echo "variables.gradle patched"
+          cat android/variables.gradle
+
       - name: Accept SDK licenses
         run: yes | sdkmanager --licenses || true
+
+      - name: Install required SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" || true
 
       - name: Build debug APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee /tmp/gradle-output.txt
+          exit ${PIPESTATUS[0]}
 
-      - name: Upload APK
+      - name: Upload gradle log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-error-log
+          path: /tmp/gradle-output.txt
+          retention-days: 7
+
+      - name: Upload APK on success
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: iTRADE-debug
