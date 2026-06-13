@@ -70,22 +70,18 @@ export default function App() {
   // Hardware back button interception
   useEffect(() => {
     const onBack = (e: PopStateEvent) => {
-      e.preventDefault();
-      if (drawerOpen) { setDrawerOpen(false); return; }
-      if (view === "indicators") { setView("signals"); return; }
-      if (view === "journal" || view === "history") { setView("signals"); return; }
-      if (view === "signals") { setView("intro"); return; }
-      // On intro, allow actual exit
+      if (drawerOpen) { setDrawerOpen(false); window.history.pushState(null, "", window.location.href); return; }
+      if (view === "indicators" || view === "journal" || view === "history") {
+        setView("signals");
+        window.history.pushState(null, "", window.location.href);
+        return;
+      }
+      // On signals or intro — allow the back navigation to actually exit/minimize
     };
     window.history.pushState(null, "", window.location.href);
     window.addEventListener("popstate", onBack);
     return () => window.removeEventListener("popstate", onBack);
   }, [view, drawerOpen]);
-
-  // Re-push state so back button always has something to pop
-  useEffect(() => {
-    window.history.pushState(null, "", window.location.href);
-  }, [view]);
 
   const navigate = (v: View) => { setView(v); setDrawerOpen(false); };
 
@@ -120,7 +116,7 @@ export default function App() {
           <button onClick={() => setDrawerOpen(true)} className="h-10 w-10 rounded-full grid place-items-center" style={{ background: C.card, border: `1px solid ${C.borderBright}` }}>
             <Menu className="h-5 w-5" style={{ color: C.crimson }} />
           </button>
-          <span className="text-base font-black tracking-[0.35em]" style={{ color: C.crimson }}>NOCTIS</span>
+          <button onClick={() => navigate("signals")} className="text-base font-black tracking-[0.35em]" style={{ color: C.crimson }}>NOCTIS</button>
           <div className="h-2.5 w-2.5 rounded-full animate-pulse" style={{ background: C.crimson }} />
         </div>
       )}
