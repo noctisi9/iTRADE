@@ -197,11 +197,37 @@ export function generateWeeklyCSV(entries: JournalEntry[], asset: string, weekSt
   return lines.join("\n");
 }
 
-export function downloadAsFile(content: string, filename: string): void {
-  const blob = new Blob([content], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+export async function downloadAsFile(content: string, filename: string): Promise<void> {
+  // Try Capacitor Filesystem + Share first (works in native APK)
+  try {
+    const { Filesystem, Directory, Encoding } = await import("@capacitor/filesystem");
+    const { Share } = await import("@capacitor/share");
+    await Filesystem.writeFile({
+      path: filename,
+      data: content,
+      directory: Directory.Cache,
+      encoding: Encoding.UTF8,
+    });
+    const uriResult = await Filesystem.getUri({ path: filename, directory: Directory.Cache });
+    await Share.share({
+      title: filename,
+      url: uriResult.uri,
+      dialogTitle: "Save or share journal report",
+    });
+    return;
+  } catch {
+    // Fall back to browser download (works on desktop / regular browser)
+  }
+  try {
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    console.error("Download failed", e);
+  }
 }
