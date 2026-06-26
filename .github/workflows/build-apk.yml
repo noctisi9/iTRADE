@@ -1,4 +1,4 @@
-﻿name: Build Android APK
+name: Build Android APK
 
 on:
   push:
@@ -19,60 +19,70 @@ jobs:
       - name: Scaffold Android platform files
         run: flutter create --platforms=android --org com.noctis.itrade .
 
-      - name: Remove default test stub (references a class that doesn't exist in this project)
+      - name: Remove default test stub
         run: rm -rf test
 
       - name: Show generated manifest (debug aid)
         run: cat android/app/src/main/AndroidManifest.xml
 
-      - name: Add INTERNET permission (required for the live Deriv feed)
+      - name: Inject permissions + app label
         run: |
           python3 - <<'PY'
           import re
           path = "android/app/src/main/AndroidManifest.xml"
           with open(path) as f:
               content = f.read()
+
+          # INTERNET permission
           if "android.permission.INTERNET" not in content:
               content = re.sub(
                   r"(<manifest[^>]*>)",
                   r'\1\n    <uses-permission android:name="android.permission.INTERNET" />',
-                  content,
-                  count=1,
+                  content, count=1,
               )
+
+          # POST_NOTIFICATIONS (Android 13+ — required for flutter_local_notifications)
+          if "android.permission.POST_NOTIFICATIONS" not in content:
+              content = re.sub(
+                  r"(<manifest[^>]*>)",
+                  r'\1\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />',
+                  content, count=1,
+              )
+
+          # App label
+          content = re.sub(r'android:label="[^"]*"', 'android:label="NOCTIS iTRADE"', content, count=1)
+
           with open(path, "w") as f:
               f.write(content)
-          assert "android.permission.INTERNET" in content, "Failed to inject INTERNET permission"
+
+          assert "android.permission.INTERNET" in content
+          assert "android.permission.POST_NOTIFICATIONS" in content
           print("Manifest OK:")
           print(content)
           PY
 
-      - name: Set app label
-        run: |
-          python3 - <<'PY'
-          import re
-          path = "android/app/src/main/AndroidManifest.xml"
-          with open(path) as f:
-              content = f.read()
-          content = re.sub(r'android:label="[^"]*"', 'android:label="NOCTIS iTRADE"', content, count=1)
-          with open(path, "w") as f:
-              f.write(content)
-          PY
-
-      - name: Bump compileSdk/targetSdk globally (defensive, helps most plugins)
+      - name: Bump compileSdk/targetSdk globally
         run: |
           echo "flutter.compileSdkVersion=36" >> android/local.properties
-          echo "flutter.targetSdkVersion=36" >> android/local.properties
+          echo "flutter.targetSdkVersion=36"  >> android/local.properties
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Patch plugin compileSdk overrides (audioplayers_android, share_plus)
+      - name: Patch plugin compileSdk overrides
         run: |
           python3 - <<'PY'
           import glob, os
 
           home = os.path.expanduser("~")
-          package_names = ["audioplayers_android", "share_plus"]
+
+          # All plugins that hardcode compileSdkVersion 33
+          package_names = [
+              "audioplayers_android",
+              "share_plus",
+              "flutter_local_notifications",
+          ]
+
           candidates = []
           for pkg in package_names:
               candidates.extend(glob.glob(f"{home}/.pub-cache/hosted/pub.dev/{pkg}-*/android/build.gradle"))
@@ -80,7 +90,7 @@ jobs:
 
           print("Found candidate files:", candidates)
           if not candidates:
-              print("WARNING: no matching plugin Gradle files found â€” pub cache layout may differ.")
+              print("WARNING: no matching plugin Gradle files found — pub cache layout may differ.")
 
           for path in candidates:
               with open(path) as f:
@@ -108,7 +118,7 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
-      - name: Analyze (surfaces Dart errors clearly before the slow build step)
+      - name: Analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build release APK

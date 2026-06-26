@@ -1,8 +1,17 @@
 import 'package:flutter/material.dart';
 import 'app_shell.dart';
+import 'services/journal_db.dart';
+import 'services/sound_service.dart';
 import 'theme.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Load persisted sound preference before starting audio engine
+  final state  = await JournalDb.instance.loadState();
+  final soundOn = (state?['soundOn'] as int? ?? 1) == 1;
+  await SoundService.instance.init(soundOn: soundOn);
+
   runApp(const NoctisApp());
 }
 

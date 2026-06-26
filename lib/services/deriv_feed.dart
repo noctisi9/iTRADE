@@ -3,11 +3,12 @@ import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/candle.dart';
 
-const int _maxCandles = 60;
-const int _granularity = 60; // 1 minute candles
+const int _maxCandles = 200; // store more to power the Garden engines
+const int _granularity = 60;
 
 /// Singleton live feed from Deriv's public WebSocket API.
-/// One physical connection, fan-out to per-symbol broadcast streams.
+/// v2: gap-fill on reconnect — fetches all candles from last known epoch
+/// to now so no data is lost while offline.
 class DerivFeed {
   DerivFeed._internal();
   static final DerivFeed instance = DerivFeed._internal();
@@ -24,15 +25,14 @@ class DerivFeed {
   StreamSubscription? _sub;
   Timer? _reconnectTimer;
 
+  // Gap-fill callback — set by signals page so missing candles get journalled
+  void Function(String symbol, List<Candle> gapCandles)? onGapFilled;
+
   StreamController<List<Candle>> _controllerFor(String symbol) {
-    return _controllers.putIfAbsent(symbol, () {
-      final c = StreamController<List<Candle>>.broadcast();
-      return c;
-    });
+    return _controllers.putIfAbsent(
+        symbol, () => StreamController<List<Candle>>.broadcast());
   }
 
-  /// Subscribe to live 1-minute candles for [symbol] (the Deriv symbol code,
-  /// e.g. 'R_75', not the display asset name).
   Stream<List<Candle>> stream(String symbol) {
     final ctrl = _controllerFor(symbol);
     if (!_requested.contains(symbol)) {
@@ -99,19 +99,34 @@ class DerivFeed {
     }
   }
 
+  /// Subscribe, requesting from the last candle we have (gap-fill) or the
+  /// most recent _maxCandles if we have nothing.
   void _sendSubscribe(String symbol) {
     final reqId = _nextReqId++;
     _reqIdToSymbol[reqId] = symbol;
-    _send({
+
+    final existing = _candles[symbol];
+    final lastEpoch = existing?.isNotEmpty == true ? existing!.last.epoch : null;
+
+    final Map<String, dynamic> req = {
       'ticks_history': symbol,
       'adjust_start_time': 1,
-      'count': _maxCandles,
       'end': 'latest',
       'style': 'candles',
       'granularity': _granularity,
       'subscribe': 1,
       'req_id': reqId,
-    });
+    };
+
+    if (lastEpoch != null) {
+      // Gap-fill: request from the last candle we have
+      req['start'] = lastEpoch;
+      req['count'] = _maxCandles;
+    } else {
+      req['count'] = _maxCandles;
+    }
+
+    _send(req);
   }
 
   void _handleMessage(dynamic raw) {
@@ -126,7 +141,8 @@ class DerivFeed {
       final reqId = data['req_id'];
       final symbol = reqId != null ? _reqIdToSymbol[reqId] : null;
       if (symbol == null) return;
-      final list = (data['candles'] as List)
+
+      final incoming = (data['candles'] as List)
           .map((c) => Candle(
                 epoch: (c['epoch'] as num).toInt(),
                 o: double.parse(c['open'].toString()),
@@ -135,8 +151,34 @@ class DerivFeed {
                 c: double.parse(c['close'].toString()),
               ))
           .toList();
-      _candles[symbol] = _markSpikes(symbol, list);
+
+      final existing = List<Candle>.from(_candles[symbol] ?? []);
+
+      // Gap-fill merge: add any incoming candles not already in memory
+      List<Candle> gapCandles = [];
+      if (existing.isNotEmpty) {
+        final existingEpochs = existing.map((c) => c.epoch).toSet();
+        gapCandles = incoming.where((c) => !existingEpochs.contains(c.epoch)).toList();
+        for (final c in gapCandles) {
+          existing.add(c);
+        }
+        existing.sort((a, b) => a.epoch.compareTo(b.epoch));
+      } else {
+        existing.addAll(incoming);
+      }
+
+      // Trim to max window
+      while (existing.length > _maxCandles) {
+        existing.removeAt(0);
+      }
+
+      _candles[symbol] = _markSpikes(symbol, existing);
       _emit(symbol);
+
+      // Notify caller of gap candles so they can be journalled
+      if (gapCandles.isNotEmpty) {
+        onGapFilled?.call(symbol, gapCandles);
+      }
     } else if (data['msg_type'] == 'ohlc' && data['ohlc'] != null) {
       final ohlc = data['ohlc'] as Map<String, dynamic>;
       final symbol = ohlc['symbol'] as String?;
@@ -161,8 +203,6 @@ class DerivFeed {
     }
   }
 
-  /// Flags abnormally large-bodied candles as "spikes" — the same heuristic
-  /// as the web app: body > median(body)*mult over the trailing window.
   List<Candle> _markSpikes(String symbol, List<Candle> list) {
     final window = list.length > 30 ? list.sublist(list.length - 30) : list;
     final bodies = window.map((c) => (c.c - c.o).abs()).toList()..sort();
@@ -171,8 +211,7 @@ class DerivFeed {
     final mult = isBoomCrash ? 4 : 6;
     return list.map((c) {
       final body = (c.c - c.o).abs();
-      final spike = med > 0 && body > med * mult;
-      return c.copyWith(spike: spike);
+      return c.copyWith(spike: med > 0 && body > med * mult);
     }).toList();
   }
 
