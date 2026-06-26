@@ -66,6 +66,44 @@ jobs:
           echo "flutter.compileSdkVersion=36" >> android/local.properties
           echo "flutter.targetSdkVersion=36"  >> android/local.properties
 
+      - name: Enable core library desugaring in app build.gradle
+        run: |
+          python3 - <<'PY'
+          import re
+
+          path = "android/app/build.gradle"
+          with open(path) as f:
+              content = f.read()
+
+          original = content
+
+          # 1. Add coreLibraryDesugaringEnabled true inside android { compileOptions { ... } }
+          #    Flutter's generated build.gradle already has a compileOptions block — we inject into it.
+          if "coreLibraryDesugaringEnabled" not in content:
+              content = re.sub(
+                  r"(compileOptions\s*\{[^}]*)(})",
+                  r"\1    coreLibraryDesugaringEnabled true\n        \2",
+                  content,
+                  count=1,
+                  flags=re.DOTALL,
+              )
+
+          # 2. Add the desugar_jdk_libs dependency inside dependencies { ... }
+          if "desugar_jdk_libs" not in content:
+              content = re.sub(
+                  r"(dependencies\s*\{)",
+                  r"\1\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'",
+                  content,
+                  count=1,
+              )
+
+          print(f"app/build.gradle changed: {content != original}")
+          print(content)
+
+          with open(path, "w") as f:
+              f.write(content)
+          PY
+
       - name: Install dependencies
         run: flutter pub get
 
