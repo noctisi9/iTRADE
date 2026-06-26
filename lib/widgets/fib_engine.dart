@@ -185,13 +185,13 @@ class _FibPainter extends CustomPainter {
     }
 
     drawOverlay(ao, Paint()
-      ..color = AppColors.black.withOpacity(0.55)
+      ..color = AppColors.black.withValues(alpha: 0.55)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2);
     drawOverlay(
         ac,
         Paint()
-          ..color = AppColors.red.withOpacity(0.55)
+          ..color = AppColors.red.withValues(alpha: 0.55)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.2,
         dashed: true);

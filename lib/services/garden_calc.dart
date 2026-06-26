@@ -152,7 +152,7 @@ GardenResult? calcGarden(List<Candle> candles) {
 // ─────────────────────────────────────────────────────────────────────────────
 double? _calcStochK(List<Candle> candles) {
   const kPeriod = 25, slowing = 8;
-  final need = kPeriod + slowing - 1;
+  const need = kPeriod + slowing - 1;
   if (candles.length < need) return null;
 
   final slice = candles.sublist(candles.length - need);

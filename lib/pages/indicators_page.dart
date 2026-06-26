@@ -500,8 +500,8 @@ class _SignalCard extends StatelessWidget {
           boxShadow: [
             BoxShadow(
               color: isSell
-                  ? const Color(0xFFFF4A4A).withOpacity(0.20)
-                  : Colors.black.withOpacity(0.06),
+                  ? const Color(0xFFFF4A4A).withValues(alpha: 0.20)
+                  : Colors.black.withValues(alpha: 0.06),
               blurRadius: 30,
               offset: const Offset(0, 10),
             ),
@@ -629,9 +629,9 @@ class _ArrowPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.square;
     // left arm
-    canvas.drawLine(Offset(0, size.height), Offset(0, 0), paint);
+    canvas.drawLine(Offset(0, size.height), const Offset(0, 0), paint);
     // top arm
-    canvas.drawLine(Offset(0, 0), Offset(size.width, 0), paint);
+    canvas.drawLine(const Offset(0, 0), Offset(size.width, 0), paint);
   }
 
   @override

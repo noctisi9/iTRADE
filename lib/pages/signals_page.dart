@@ -75,7 +75,7 @@ class _SignalsPageState extends State<SignalsPage> {
                 width: active ? 28 : 8,
                 height: 8,
                 decoration: BoxDecoration(
-                  color: active ? AppColors.red : AppColors.textMuted.withOpacity(0.4),
+                  color: active ? AppColors.red : AppColors.textMuted.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(4),
                 ),
               );
@@ -234,7 +234,7 @@ class _AssetSignalViewState extends State<_AssetSignalView> {
     return '*NOCTIS SIGNAL — ${widget.asset}*\n'
         'Direction: *$dirLabel*\n'
         'Entry: ${_entry.toStringAsFixed(3)} → Target: ${_target.toStringAsFixed(3)}\n'
-        '_$t_';
+        '_${t}_';
   }
 
   void _copySignal() {
@@ -329,7 +329,7 @@ class _AssetSignalViewState extends State<_AssetSignalView> {
                                   color: AppColors.red,
                                   fontWeight: FontWeight.bold,
                                   shadows: [
-                                    Shadow(color: Colors.white.withOpacity(0.9), blurRadius: 6),
+                                    Shadow(color: Colors.white.withValues(alpha: 0.9), blurRadius: 6),
                                   ],
                                 ),
                               ),

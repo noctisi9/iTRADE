@@ -65,7 +65,7 @@ class _RadialNodeState extends State<RadialNode>
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
-                color: widget.color.withOpacity(glowOpacity),
+                color: widget.color.withValues(alpha: glowOpacity),
                 blurRadius: blurRadius,
                 spreadRadius: 4,
               ),

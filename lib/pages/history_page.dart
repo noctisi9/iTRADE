@@ -53,7 +53,7 @@ class _HistoryPageState extends State<HistoryPage> {
     void flush() {
       if (dir != null && buf.length >= 3) {
         runs.add(_TradeRun(
-          direction: dir!,
+          direction: dir,
           start: DateTime.fromMillisecondsSinceEpoch(buf.first.epoch * 1000),
           end: DateTime.fromMillisecondsSinceEpoch(buf.last.epoch * 1000),
           entry: buf.first.open,

@@ -66,7 +66,7 @@ class _IntroPageState extends State<IntroPage> {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Colors.black.withOpacity(0.25), Colors.transparent],
+                colors: [Colors.black.withValues(alpha: 0.25), Colors.transparent],
                 stops: const [0.0, 0.25],
               ),
             ),
