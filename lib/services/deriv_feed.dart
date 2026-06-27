@@ -3,133 +3,157 @@ import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/candle.dart';
 
-const int _maxCandles = 200; // store more to power the Garden engines
-const int _granularity = 60;
+// Supported timeframes in seconds
+const Map<String, int> kGranularities = {
+  '1m':  60,
+  '5m':  300,
+  '15m': 900,
+};
 
-/// Singleton live feed from Deriv's public WebSocket API.
-/// v2: gap-fill on reconnect — fetches all candles from last known epoch
-/// to now so no data is lost while offline.
+const int _maxCandles = 300;
+
+/// Key: 'SYMBOL_TF' e.g. 'BOOM1000_1m'
+String feedKey(String symbol, String tf) => '${symbol}_$tf';
+
+/// Singleton live feed — manages one WebSocket per timeframe.
+/// Gap-fill: on reconnect requests from last known epoch to 'latest'.
 class DerivFeed {
-  DerivFeed._internal();
-  static final DerivFeed instance = DerivFeed._internal();
+  DerivFeed._();
+  static final DerivFeed instance = DerivFeed._();
 
-  WebSocketChannel? _channel;
-  bool _connected = false;
-  bool _connecting = false;
-  final List<Map<String, dynamic>> _queue = [];
-  final Map<String, List<Candle>> _candles = {};
+  // State per feedKey
+  final Map<String, List<Candle>> _candles     = {};
   final Map<String, StreamController<List<Candle>>> _controllers = {};
-  final Set<String> _requested = {};
-  final Map<int, String> _reqIdToSymbol = {};
+  final Map<String, int?> _lastEpoch           = {};
+
+  // Active subscriptions: reqId → feedKey
+  final Map<int, String> _reqToKey = {};
   int _nextReqId = 1;
-  StreamSubscription? _sub;
-  Timer? _reconnectTimer;
 
-  // Gap-fill callback — set by signals page so missing candles get journalled
-  void Function(String symbol, List<Candle> gapCandles)? onGapFilled;
+  // Per-timeframe WebSocket
+  final Map<String, WebSocketChannel?> _channels   = {};
+  final Map<String, StreamSubscription?> _subs      = {};
+  final Map<String, bool> _connected                = {};
+  final Map<String, Timer?> _reconnectTimers        = {};
+  final Map<String, List<Map<String, dynamic>>> _queues = {};
+  final Map<String, Set<String>> _requested         = {}; // tf → set of symbols
 
-  StreamController<List<Candle>> _controllerFor(String symbol) {
-    return _controllers.putIfAbsent(
-        symbol, () => StreamController<List<Candle>>.broadcast());
-  }
+  // Gap-fill callback — journal missed candles
+  void Function(String feedKey, List<Candle> gap)? onGapFilled;
 
-  Stream<List<Candle>> stream(String symbol) {
-    final ctrl = _controllerFor(symbol);
-    if (!_requested.contains(symbol)) {
-      _requested.add(symbol);
-      _sendSubscribe(symbol);
+  // ── Public API ────────────────────────────────────────────────────────────
+
+  Stream<List<Candle>> stream(String symbol, String tf) {
+    final key  = feedKey(symbol, tf);
+    final ctrl = _controllers.putIfAbsent(
+        key, () => StreamController<List<Candle>>.broadcast());
+
+    _requested.putIfAbsent(tf, () => {});
+    if (!_requested[tf]!.contains(symbol)) {
+      _requested[tf]!.add(symbol);
+      _ensureConnected(tf);
+      _subscribe(symbol, tf);
     } else {
-      _connect();
-      final cached = _candles[symbol];
-      if (cached != null) {
-        scheduleMicrotask(() => ctrl.add(List.unmodifiable(cached)));
-      }
+      _ensureConnected(tf);
+      final c = _candles[key];
+      if (c != null) scheduleMicrotask(() => ctrl.add(List.unmodifiable(c)));
     }
     return ctrl.stream;
   }
 
-  void _connect() {
-    if (_connecting || _connected) return;
-    _connecting = true;
+  List<Candle> current(String symbol, String tf) =>
+      List.unmodifiable(_candles[feedKey(symbol, tf)] ?? const []);
+
+  // ── Connection management ─────────────────────────────────────────────────
+
+  void _ensureConnected(String tf) {
+    if (_connected[tf] == true) return;
+    _doConnect(tf);
+  }
+
+  void _doConnect(String tf) {
+    _subs[tf]?.cancel();
+    _channels[tf]?.sink.close();
+    _connected[tf] = false;
+
     try {
-      final channel = WebSocketChannel.connect(
-        Uri.parse('wss://ws.derivws.com/websockets/v3?app_id=1089'),
-      );
-      _channel = channel;
-      _sub = channel.stream.listen(
-        _handleMessage,
-        onDone: _handleClose,
-        onError: (_) => _handleClose(),
+      final ch = WebSocketChannel.connect(
+          Uri.parse('wss://ws.derivws.com/websockets/v3?app_id=1089'));
+      _channels[tf] = ch;
+      _subs[tf] = ch.stream.listen(
+        (raw) => _onMessage(tf, raw),
+        onDone: () => _onClose(tf),
+        onError: (_) => _onClose(tf),
         cancelOnError: true,
       );
-      _connected = true;
-      _connecting = false;
-      for (final m in _queue) {
-        _channel!.sink.add(jsonEncode(m));
+      _connected[tf] = true;
+
+      // Flush queued messages
+      for (final m in (_queues[tf] ?? [])) {
+        ch.sink.add(jsonEncode(m));
       }
-      _queue.clear();
-      for (final sym in _requested) {
-        _sendSubscribe(sym);
+      _queues[tf]?.clear();
+
+      // Re-subscribe all symbols for this timeframe
+      for (final sym in (_requested[tf] ?? <String>{})) {
+        _subscribe(sym, tf);
       }
     } catch (_) {
-      _connecting = false;
-      _scheduleReconnect();
+      _scheduleReconnect(tf);
     }
   }
 
-  void _handleClose() {
-    _connected = false;
-    _connecting = false;
-    _channel = null;
-    _sub?.cancel();
-    if (_requested.isNotEmpty) _scheduleReconnect();
+  void _onClose(String tf) {
+    _connected[tf] = false;
+    _subs[tf]?.cancel();
+    _channels[tf] = null;
+    if ((_requested[tf] ?? {}).isNotEmpty) _scheduleReconnect(tf);
   }
 
-  void _scheduleReconnect() {
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(milliseconds: 1500), _connect);
+  void _scheduleReconnect(String tf) {
+    _reconnectTimers[tf]?.cancel();
+    _reconnectTimers[tf] =
+        Timer(const Duration(milliseconds: 2000), () => _doConnect(tf));
   }
 
-  void _send(Map<String, dynamic> msg) {
-    if (_connected && _channel != null) {
-      _channel!.sink.add(jsonEncode(msg));
+  void _send(String tf, Map<String, dynamic> msg) {
+    if (_connected[tf] == true && _channels[tf] != null) {
+      _channels[tf]!.sink.add(jsonEncode(msg));
     } else {
-      _queue.add(msg);
-      _connect();
+      _queues.putIfAbsent(tf, () => []).add(msg);
+      _ensureConnected(tf);
     }
   }
 
-  /// Subscribe, requesting from the last candle we have (gap-fill) or the
-  /// most recent _maxCandles if we have nothing.
-  void _sendSubscribe(String symbol) {
-    final reqId = _nextReqId++;
-    _reqIdToSymbol[reqId] = symbol;
+  // ── Subscription (gap-aware) ──────────────────────────────────────────────
 
-    final existing = _candles[symbol];
-    final lastEpoch = existing?.isNotEmpty == true ? existing!.last.epoch : null;
+  void _subscribe(String symbol, String tf) {
+    final key       = feedKey(symbol, tf);
+    final gran      = kGranularities[tf]!;
+    final reqId     = _nextReqId++;
+    _reqToKey[reqId] = key;
 
-    final Map<String, dynamic> req = {
+    final lastEp = _lastEpoch[key];
+    final req = <String, dynamic>{
       'ticks_history': symbol,
       'adjust_start_time': 1,
-      'end': 'latest',
-      'style': 'candles',
-      'granularity': _granularity,
-      'subscribe': 1,
-      'req_id': reqId,
+      'end':         'latest',
+      'style':       'candles',
+      'granularity': gran,
+      'count':       _maxCandles,
+      'subscribe':   1,
+      'req_id':      reqId,
     };
-
-    if (lastEpoch != null) {
-      // Gap-fill: request from the last candle we have
-      req['start'] = lastEpoch;
-      req['count'] = _maxCandles;
-    } else {
-      req['count'] = _maxCandles;
+    if (lastEp != null) {
+      // Gap-fill: request from last known candle forward
+      req['start'] = lastEp;
     }
-
-    _send(req);
+    _send(tf, req);
   }
 
-  void _handleMessage(dynamic raw) {
+  // ── Message handling ──────────────────────────────────────────────────────
+
+  void _onMessage(String tf, dynamic raw) {
     Map<String, dynamic> data;
     try {
       data = jsonDecode(raw as String) as Map<String, dynamic>;
@@ -137,90 +161,108 @@ class DerivFeed {
       return;
     }
 
-    if (data['msg_type'] == 'candles' && data['candles'] != null) {
-      final reqId = data['req_id'];
-      final symbol = reqId != null ? _reqIdToSymbol[reqId] : null;
+    if (data['msg_type'] == 'candles') {
+      final reqId = data['req_id'] as int?;
+      final key   = reqId != null ? _reqToKey[reqId] : null;
+      if (key == null) return;
+
+      final incoming = _parseCandles(data['candles'] as List);
+      _mergeCandles(key, incoming, tf);
+
+    } else if (data['msg_type'] == 'ohlc') {
+      final ohlc   = data['ohlc'] as Map<String, dynamic>;
+      final symbol = ohlc['symbol'] as String?;
       if (symbol == null) return;
 
-      final incoming = (data['candles'] as List)
-          .map((c) => Candle(
-                epoch: (c['epoch'] as num).toInt(),
-                o: double.parse(c['open'].toString()),
-                h: double.parse(c['high'].toString()),
-                l: double.parse(c['low'].toString()),
-                c: double.parse(c['close'].toString()),
-              ))
-          .toList();
+      // Find which tf this subscription belongs to — match granularity
+      final gran      = (ohlc['granularity'] as num?)?.toInt();
+      final matchedTf = kGranularities.entries
+          .where((e) => e.value == gran)
+          .map((e) => e.key)
+          .firstOrNull;
+      final key = matchedTf != null ? feedKey(symbol, matchedTf) : null;
+      if (key == null) return;
 
-      final existing = List<Candle>.from(_candles[symbol] ?? []);
-
-      // Gap-fill merge: add any incoming candles not already in memory
-      List<Candle> gapCandles = [];
-      if (existing.isNotEmpty) {
-        final existingEpochs = existing.map((c) => c.epoch).toSet();
-        gapCandles = incoming.where((c) => !existingEpochs.contains(c.epoch)).toList();
-        for (final c in gapCandles) {
-          existing.add(c);
-        }
-        existing.sort((a, b) => a.epoch.compareTo(b.epoch));
-      } else {
-        existing.addAll(incoming);
-      }
-
-      // Trim to max window
-      while (existing.length > _maxCandles) {
-        existing.removeAt(0);
-      }
-
-      _candles[symbol] = _markSpikes(symbol, existing);
-      _emit(symbol);
-
-      // Notify caller of gap candles so they can be journalled
-      if (gapCandles.isNotEmpty) {
-        onGapFilled?.call(symbol, gapCandles);
-      }
-    } else if (data['msg_type'] == 'ohlc' && data['ohlc'] != null) {
-      final ohlc = data['ohlc'] as Map<String, dynamic>;
-      final symbol = ohlc['symbol'] as String?;
-      if (symbol == null || !_requested.contains(symbol)) return;
       final epochRaw = ohlc['open_time'] ?? ohlc['epoch'];
       final fresh = Candle(
         epoch: (epochRaw as num).toInt(),
-        o: double.parse(ohlc['open'].toString()),
-        h: double.parse(ohlc['high'].toString()),
-        l: double.parse(ohlc['low'].toString()),
-        c: double.parse(ohlc['close'].toString()),
+        o: _d(ohlc['open']),
+        h: _d(ohlc['high']),
+        l: _d(ohlc['low']),
+        c: _d(ohlc['close']),
       );
-      final list = List<Candle>.from(_candles[symbol] ?? []);
+
+      final list = List<Candle>.from(_candles[key] ?? []);
       if (list.isNotEmpty && list.last.epoch == fresh.epoch) {
         list[list.length - 1] = fresh;
       } else {
         list.add(fresh);
         if (list.length > _maxCandles) list.removeAt(0);
       }
-      _candles[symbol] = _markSpikes(symbol, list);
-      _emit(symbol);
+      _candles[key] = _markSpikes(symbol, list);
+      _lastEpoch[key] = list.last.epoch;
+      _emit(key);
     }
   }
+
+  // ── Merge with gap-fill ───────────────────────────────────────────────────
+
+  void _mergeCandles(String key, List<Candle> incoming, String tf) {
+    final existing = List<Candle>.from(_candles[key] ?? []);
+    final List<Candle> gapCandles;
+
+    if (existing.isNotEmpty) {
+      final existingEpochs = existing.map((c) => c.epoch).toSet();
+      gapCandles = incoming.where((c) => !existingEpochs.contains(c.epoch)).toList();
+      existing.addAll(gapCandles);
+      existing.sort((a, b) => a.epoch.compareTo(b.epoch));
+    } else {
+      gapCandles = [];
+      existing.addAll(incoming);
+    }
+
+    while (existing.length > _maxCandles) existing.removeAt(0);
+
+    // Extract symbol from key (format: SYMBOL_TF)
+    final symbol = key.substring(0, key.lastIndexOf('_'));
+    _candles[key] = _markSpikes(symbol, existing);
+    if (existing.isNotEmpty) _lastEpoch[key] = existing.last.epoch;
+    _emit(key);
+
+    if (gapCandles.isNotEmpty) {
+      onGapFilled?.call(key, gapCandles);
+    }
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  List<Candle> _parseCandles(List<dynamic> raw) {
+    return raw.map((c) => Candle(
+          epoch: (c['epoch'] as num).toInt(),
+          o: _d(c['open']),
+          h: _d(c['high']),
+          l: _d(c['low']),
+          c: _d(c['close']),
+        )).toList();
+  }
+
+  double _d(dynamic v) => double.parse(v.toString());
 
   List<Candle> _markSpikes(String symbol, List<Candle> list) {
     final window = list.length > 30 ? list.sublist(list.length - 30) : list;
     final bodies = window.map((c) => (c.c - c.o).abs()).toList()..sort();
-    final med = bodies.isNotEmpty ? bodies[bodies.length ~/ 2] : 0.0001;
+    final med    = bodies.isNotEmpty ? bodies[bodies.length ~/ 2] : 0.0001;
     final isBoomCrash = symbol.startsWith('BOOM') || symbol.startsWith('CRASH');
-    final mult = isBoomCrash ? 4 : 6;
+    final mult   = isBoomCrash ? 4 : 6;
     return list.map((c) {
       final body = (c.c - c.o).abs();
       return c.copyWith(spike: med > 0 && body > med * mult);
     }).toList();
   }
 
-  void _emit(String symbol) {
-    final list = _candles[symbol];
+  void _emit(String key) {
+    final list = _candles[key];
     if (list == null) return;
-    _controllers[symbol]?.add(List.unmodifiable(list));
+    _controllers[key]?.add(List.unmodifiable(list));
   }
-
-  List<Candle> currentCandles(String symbol) =>
-      List.unmodifiable(_candles[symbol] ?? const []);
 }
