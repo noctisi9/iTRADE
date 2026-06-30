@@ -397,12 +397,18 @@ class GardenState {
       final sign = invert ? -1.0 : 1.0;
       final q = List<double>.filled(m, 1.0);
       for (var i = 0; i < m; i++) {
-        if (i > 0) q[i] *= math.exp(sign * (s[i] - s[i-1]) / s[i-1] * scale);
-        if (i < m - 1) q[i] *= math.exp(sign * (s[i+1] - s[i]) / s[i] * scale);
+        if (i > 0) {
+          q[i] *= math.exp(sign * (s[i] - s[i-1]) / s[i-1] * scale);
+        }
+        if (i < m - 1) {
+          q[i] *= math.exp(sign * (s[i+1] - s[i]) / s[i] * scale);
+        }
       }
       final p = List<double>.filled(m, 0.0);
       p[0] = q[0];
-      for (var i = 1; i < m; i++) p[i] = p[i-1] * q[i];
+      for (var i = 1; i < m; i++) {
+        p[i] = p[i-1] * q[i];
+      }
       final total = p.fold(0.0, (a, b) => a + b);
       if (total == 0) return p;
       return p.map((v) => v / total).toList();

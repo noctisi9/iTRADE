@@ -74,10 +74,12 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    if (_restoring) return const Scaffold(
-        body: Center(child: CircularProgressIndicator()));
-    if (!_introDone) return IntroPage(
-        onDone: () => setState(() => _introDone = true));
+    if (_restoring) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (!_introDone) {
+      return IntroPage(onDone: () => setState(() => _introDone = true));
+    }
 
     return Scaffold(
       key: _scaffoldKey,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/deriv_feed.dart';
 import '../services/journal_db.dart';
 import '../theme.dart';
 

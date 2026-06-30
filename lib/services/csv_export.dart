@@ -31,19 +31,14 @@ String _acTag(double v) {
   return 'FLAT';
 }
 
-String _mmmTag(double d) => d < 0 ? 'BEARISH_MOMENTUM' : 'BULLISH_MOMENTUM';
-
 List<String> _buildSequenceLines(List<JournalEntry> entries) {
   final lines = <String>[];
-  var n = 0;
   for (final e in entries) {
     final o = e.open.toStringAsFixed(5);
     final c = e.close.toStringAsFixed(5);
     final t = _hhmm(e.epoch);
-    n += 1;
-    lines.add(n == 1
-        ? 'A CANDLE FORMED $o TO $c   {TIME:$t}'
-        : 'CANDLE $n FORMED $o TO $c   {TIME:$t}');
+    final spikeTag = e.spike ? '  [SPIKE]' : '';
+    lines.add('CANDLE ${e.candleNum} FORMED $o TO $c   {TIME:$t}$spikeTag');
     lines.add('');
   }
   return lines;
@@ -55,43 +50,45 @@ List<String> _buildIndicatorLines(List<JournalEntry> entries) {
     '==================== INDICATOR DATA ====================',
     ''
   ];
-  var n = 0;
   for (final e in entries) {
-    final t     = _hhmm(e.epoch);
-    final spread = (e.highLowSpread ?? (e.high - e.low).abs()).toStringAsFixed(5);
+    final t      = _hhmm(e.epoch);
     final aoStr  = '${e.ao >= 0 ? '+' : ''}${e.ao.toStringAsFixed(5)}';
     final acStr  = '${e.ac >= 0 ? '+' : ''}${e.ac.toStringAsFixed(5)}';
-    n += 1;
-    final label = n == 1 ? 'CANDLE 1' : 'CANDLE $n';
-    lines.add('[$t] $label | spread: $spread | ticks: ${e.tickVolume ?? 0}');
-    lines.add('        AO: $aoStr [${_aoTag(e.ao)}] | AC: $acStr [${_acTag(e.ac)}]');
-    lines.add('        Stoch K: ${e.stochK.toStringAsFixed(2)} | MMM: ${e.mmmDelta.toStringAsFixed(6)} [${_mmmTag(e.mmmDelta)}]');
-    lines.add('        Risk Score: ${e.riskPct}% | Signal: ${e.signal}');
+    lines.add('[$t] CANDLE ${e.candleNum}  |  movement: ${e.movement.toStringAsFixed(5)}');
+    lines.add('        AO: $aoStr [${_aoTag(e.ao)}]  |  AC: $acStr [${_acTag(e.ac)}]');
+    lines.add('        Stoch K: ${e.stochK.toStringAsFixed(2)} [${e.stochLabel}]  |  '
+        '${e.timeframe.toUpperCase()} 4th node: ${e.mmmDelta.toStringAsFixed(6)} [${e.mmmDir}]');
+    lines.add('        Risk Score: ${e.riskPct}%  |  Signal: ${e.signal}  |  '
+        'Candles since spike: ${e.candlesSinceSpike}');
     lines.add('');
   }
   return lines;
 }
 
 String generateDailyCSV(
-    List<JournalEntry> entries, String asset, DateTime date) {
+    List<JournalEntry> entries, String asset, String tf, DateTime date) {
   final timeStr = entries.isNotEmpty ? _hhmm(entries.first.epoch) : '--:--';
-  final head = [asset, '', 'DATE: ${_longDate(date)}', '', 'TIME: $timeStr', '', ''];
+  final head = [
+    asset, tf.toUpperCase(), '',
+    'DATE: ${_longDate(date)}', '',
+    'TIME: $timeStr', '', ''
+  ];
   return [
     ...head,
     ..._buildSequenceLines(entries),
-    ..._buildIndicatorLines(entries)
+    ..._buildIndicatorLines(entries),
   ].join('\n');
 }
 
 String generateWeeklyCSV(
-    List<JournalEntry> entries, String asset, DateTime weekStart) {
+    List<JournalEntry> entries, String asset, String tf, DateTime weekStart) {
   final byDay = <String, List<JournalEntry>>{};
   for (final e in entries) {
     final d   = DateTime.fromMillisecondsSinceEpoch(e.epoch * 1000, isUtc: true);
     final key = '${d.year}-${_pad(d.month)}-${_pad(d.day)}';
     byDay.putIfAbsent(key, () => []).add(e);
   }
-  final lines = <String>[asset, '', 'WEEK OF: ${_longDate(weekStart)}', ''];
+  final lines = <String>[asset, tf.toUpperCase(), '', 'WEEK OF: ${_longDate(weekStart)}', ''];
   final keys  = byDay.keys.toList()..sort();
   for (final day in keys) {
     final dayEntries = byDay[day]!;

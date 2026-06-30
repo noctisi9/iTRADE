@@ -221,7 +221,9 @@ class DerivFeed {
       existing.addAll(incoming);
     }
 
-    while (existing.length > _maxCandles) existing.removeAt(0);
+    while (existing.length > _maxCandles) {
+      existing.removeAt(0);
+    }
 
     // Extract symbol from key (format: SYMBOL_TF)
     final symbol = key.substring(0, key.lastIndexOf('_'));
