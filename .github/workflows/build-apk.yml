@@ -46,11 +46,26 @@ jobs:
               content = re.sub(r"(<manifest[^>]*>)",
                   r'\1\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />',
                   content, count=1)
+          if "android.permission.FOREGROUND_SERVICE" not in content:
+              content = re.sub(r"(<manifest[^>]*>)",
+                  r'\1\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />',
+                  content, count=1)
+          if "android.permission.FOREGROUND_SERVICE_DATA_SYNC" not in content:
+              content = re.sub(r"(<manifest[^>]*>)",
+                  r'\1\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />',
+                  content, count=1)
+          if "android.permission.WAKE_LOCK" not in content:
+              content = re.sub(r"(<manifest[^>]*>)",
+                  r'\1\n    <uses-permission android:name="android.permission.WAKE_LOCK" />',
+                  content, count=1)
           content = re.sub(r'android:label="[^"]*"', 'android:label="NOCTIS iTRADE"', content, count=1)
           with open(path, "w") as f:
               f.write(content)
           assert "android.permission.INTERNET" in content
           assert "android.permission.POST_NOTIFICATIONS" in content
+          assert "android.permission.FOREGROUND_SERVICE" in content
+          assert "android.permission.FOREGROUND_SERVICE_DATA_SYNC" in content
+          assert "android.permission.WAKE_LOCK" in content
           print("Manifest OK")
           PY
 
@@ -152,6 +167,7 @@ jobs:
               "audioplayers_android",
               "share_plus",
               "flutter_local_notifications",
+              "flutter_background_service_android",
           ]
           candidates = []
           for pkg in package_names:

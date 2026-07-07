@@ -12,11 +12,10 @@ import '../widgets/particle_layer.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // Garden of Swords — Indicators Page
 //
-// Rebuilt from MT5 screenshots:
-//   TOP    node → AO  (value, rising=orange / falling=black)
-//   RIGHT  node → Stochastic K / D  (K%, label: OVERBOUGHT/OVERSOLD/NEUTRAL)
-//   BOTTOM node → AC  (value, rising=orange / falling=black)
-//   LEFT   node → MINIMAX (BOOM/CRASH) | MA CROSS (VIX)
+// 3-node tomoe layout (positions only — node design unchanged):
+//   TOP node          → AO   (value only, no label)
+//   BOTTOM-RIGHT node → STOCH (OVERBOUGHT / OVERSOLD only, blank if neutral)
+//   BOTTOM-LEFT node  → AC   (value only, no label)
 //
 // Below the radial: live data panel showing exact MT5-style readings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,81 +222,60 @@ class _GardenViewport extends StatelessWidget {
             ? const Color(0xFF47F05F)
             : const Color(0xFFFF8C00);
 
-    // 4th node
-    final Color fourthColor;
-    switch (g.fourthColor) {
-      case Color4.red:     fourthColor = const Color(0xFFFF4A4A);
-      case Color4.green:   fourthColor = const Color(0xFF47F05F);
-      case Color4.orange:  fourthColor = const Color(0xFFFF8C00);
-      case Color4.neutral: fourthColor = const Color(0xFF999999);
+    // ── Tomoe positions — 3 nodes at 120° apart around the ring ───────────────
+    // Angles measured from center; 0° = top, clockwise.
+    //   AO           → top          (angle   0°)
+    //   STOCH        → bottom-right (angle 120°)
+    //   AC           → bottom-left  (angle 240°)
+    const radius = half - nodeH * 0.15;
+    Offset tomoePos(double degrees) {
+      final rad = (degrees - 90) * math.pi / 180;
+      return Offset(
+        half + radius * math.cos(rad) - nodeH,
+        half + radius * math.sin(rad) - nodeH,
+      );
     }
+    final aoPos    = tomoePos(0);
+    final stochPos = tomoePos(120);
+    final acPos    = tomoePos(240);
 
     return Center(
       child: SizedBox(width: sz, height: sz,
         child: Stack(clipBehavior: Clip.none, children: [
 
-          const Positioned.fill(child: ParticleLayer()),
+          Positioned.fill(child: ParticleLayer(garden: g)),
 
-          // ── AO node — TOP ────────────────────────────────────────────────────
-          Positioned(top: -nodeH, left: half - nodeH,
+          // ── AO node — TOMOE TOP ──────────────────────────────────────────────
+          Positioned(left: aoPos.dx, top: aoPos.dy,
             child: _FloatingNode(offset: const Offset(0, -5),
               child: RadialNode(
                 size: nodeSz, color: aoColor, pct: g.aoPct,
                 pinAngle: _ang(nodeSz, 78, 13),
                 child: _NodeContent(
-                  topLabel: 'AO',
                   line1: _fmtOsc(g.ao),
                   line1Color: aoColor,
-                  line2: g.aoRising ? '▲ RISING' : '▼ FALLING',
-                  line2Color: g.aoRising
-                      ? const Color(0xFFFF8C00)
-                      : const Color(0xFF888888),
                 )))),
 
-          // ── STOCH node — RIGHT ───────────────────────────────────────────────
-          Positioned(top: half - nodeH, right: -nodeH,
-            child: _FloatingNode(offset: const Offset(5, 0),
+          // ── STOCH node — TOMOE BOTTOM-RIGHT ─────────────────────────────────
+          Positioned(left: stochPos.dx, top: stochPos.dy,
+            child: _FloatingNode(offset: const Offset(5, 4),
               child: RadialNode(
                 size: nodeSz, color: stochColor, pct: g.stochK,
                 pinAngle: _ang(nodeSz, 76, 76),
                 child: _NodeContent(
-                  topLabel: 'STOCH 25,5,8',
-                  line1: 'K ${g.stochK.toStringAsFixed(2)}',
+                  line1: g.stochLabel == 'NEUTRAL' ? '' : g.stochLabel,
                   line1Color: stochColor,
-                  line2: 'D ${g.stochD.toStringAsFixed(2)}',
-                  line2Color: AppColors.textMuted,
-                  line3: g.stochLabel,
-                  line3Color: stochColor,
                 )))),
 
-          // ── AC node — BOTTOM ─────────────────────────────────────────────────
-          Positioned(bottom: -nodeH, left: half - nodeH,
-            child: _FloatingNode(offset: const Offset(0, 5),
+          // ── AC node — TOMOE BOTTOM-LEFT ──────────────────────────────────────
+          Positioned(left: acPos.dx, top: acPos.dy,
+            child: _FloatingNode(offset: const Offset(-5, 4),
               child: RadialNode(
                 size: nodeSz, color: acColor, pct: g.acPct,
                 pinAngle: _ang(nodeSz, 12, 76),
                 child: _NodeContent(
-                  topLabel: 'AC',
                   line1: _fmtOsc(g.ac),
                   line1Color: acColor,
-                  line2: g.acRising ? '▲ RISING' : '▼ FALLING',
-                  line2Color: g.acRising
-                      ? const Color(0xFFFF8C00)
-                      : const Color(0xFF888888),
-                )))),
-
-          // ── 4th node — LEFT ──────────────────────────────────────────────────
-          Positioned(top: half - nodeH, left: -nodeH,
-            child: _FloatingNode(offset: const Offset(-5, 0),
-              child: RadialNode(
-                size: nodeSz, color: fourthColor, pct: g.fourthPct,
-                pinAngle: _ang(nodeSz, 12, 13),
-                child: _NodeContent(
-                  topLabel: g.fourthNodeLabel,
-                  line1: g.fourthBigVal,
-                  line1Color: fourthColor,
-                  line2: g.fourthSubVal,
-                  line2Color: fourthColor,
                 )))),
 
           // ── Central score ────────────────────────────────────────────────────
@@ -321,6 +299,26 @@ class _GardenViewport extends StatelessWidget {
               const Text('/ 100',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500,
                       color: AppColors.textMuted)),
+              const SizedBox(height: 2),
+              // Confidence trend — momentum of confluence over last 5 candles
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(
+                  g.scoreTrend == 'RISING'  ? Icons.trending_up
+                      : g.scoreTrend == 'FALLING' ? Icons.trending_down
+                      : Icons.trending_flat,
+                  size: 13,
+                  color: g.scoreTrend == 'RISING'  ? const Color(0xFF27AE60)
+                      : g.scoreTrend == 'FALLING' ? AppColors.red
+                      : AppColors.textMuted,
+                ),
+                const SizedBox(width: 3),
+                Text(g.scoreTrend,
+                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                        color: g.scoreTrend == 'RISING'  ? const Color(0xFF27AE60)
+                            : g.scoreTrend == 'FALLING' ? AppColors.red
+                            : AppColors.textMuted)),
+              ]),
             ]),
           ),
         ]),
@@ -348,7 +346,6 @@ class _DataPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final g    = garden;
-    final type = assetType(asset);
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -403,34 +400,12 @@ class _DataPanel extends StatelessWidget {
         ]),
         const SizedBox(height: 6),
 
-        // ── Row 4: 4th node ──
+        // ── Row 4: spike counter ──
         Row(children: [
-          _dataLabel(g.fourthNodeLabel),
+          _dataLabel('Since last spike'),
           const Spacer(),
-          if (type == AssetType.vix) ...[
-            _dataVal('AO sig: ${_fmtOsc(g.ao)}', AppColors.textDim, size: 10),
-            const SizedBox(width: 8),
-            _badge(g.maCrossLabel,
-                g.maCrossBullish ? const Color(0xFF27AE60)
-                    : g.maCrossBearish ? AppColors.red
-                    : AppColors.textMuted),
-          ] else ...[
-            _dataVal('Δ ${g.mmmDelta.toStringAsFixed(5)}', AppColors.textDim, size: 10),
-            const SizedBox(width: 8),
-            _badge(g.mmmBearish ? 'BEARISH' : 'BULLISH',
-                g.mmmBearish ? AppColors.red : const Color(0xFF27AE60)),
-          ],
+          _dataVal('${g.candlesSinceSpike} candles', AppColors.textDim),
         ]),
-
-        if (type != AssetType.vix) ...[
-          const SizedBox(height: 6),
-          // ── Row 5: spike counter ──
-          Row(children: [
-            _dataLabel('Since last spike'),
-            const Spacer(),
-            _dataVal('${g.candlesSinceSpike} candles', AppColors.textDim),
-          ]),
-        ],
       ]),
     );
   }
@@ -598,20 +573,12 @@ class _FloatingNodeState extends State<_FloatingNode>
 // Node content — up to 3 text lines
 // ─────────────────────────────────────────────────────────────────────────────
 class _NodeContent extends StatelessWidget {
-  final String  topLabel;
   final String  line1;
   final Color   line1Color;
-  final String? line2;
-  final Color?  line2Color;
-  final String? line3;
-  final Color?  line3Color;
 
   const _NodeContent({
-    required this.topLabel,
     required this.line1,
     required this.line1Color,
-    this.line2, this.line2Color,
-    this.line3, this.line3Color,
   });
 
   @override
@@ -621,33 +588,12 @@ class _NodeContent extends StatelessWidget {
       child: Column(mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Label
-          Text(topLabel,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 7, fontWeight: FontWeight.w700,
-                  color: AppColors.textMuted, letterSpacing: 0.3),
-              maxLines: 2, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 2),
-          // Big value
+          // Big value (or status word) — no name label, no sub-lines
           Text(line1,
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900,
                   color: line1Color, fontFamily: 'monospace'),
               maxLines: 1, overflow: TextOverflow.ellipsis),
-          // Sub lines
-          if (line2 != null)
-            Text(line2!,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700,
-                    color: line2Color ?? AppColors.textMuted),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-          if (line3 != null)
-            Text(line3!,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700,
-                    color: line3Color ?? AppColors.textMuted,
-                    letterSpacing: 0.5),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
         ]),
     );
   }

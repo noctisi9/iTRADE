@@ -17,9 +17,10 @@ class AppColors {
   static const textMuted = Color(0xFF999999);
 }
 
-const List<String> kAssets = ['BOOM1000', 'CRASH1000', 'VIX75', 'VIX75 1s'];
-
-bool isVix(String asset) => asset.startsWith('VIX');
+const List<String> kAssets = [
+  'BOOM1000', 'BOOM900', 'BOOM600', 'BOOM500', 'BOOM300',
+  'CRASH1000', 'CRASH900', 'CRASH600', 'CRASH500', 'CRASH300',
+];
 
 String shortAssetLabel(String a) =>
-    a.replaceAll('VIX75 1s', 'VIX1s').replaceAll('1000', '');
+    a.replaceAll('BOOM', 'B').replaceAll('CRASH', 'C');

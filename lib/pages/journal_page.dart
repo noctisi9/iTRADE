@@ -187,8 +187,7 @@ class _JournalPageState extends State<JournalPage> {
                 Expanded(
                   child: ListView.builder(
                     itemCount: _entries.length,
-                    itemBuilder: (_, i) => _CandleCard(entry: _entries[i],
-                        isVix: isVix(_asset)),
+                    itemBuilder: (_, i) => _CandleCard(entry: _entries[i]),
                   ),
                 ),
 
@@ -214,6 +213,19 @@ class _JournalPageState extends State<JournalPage> {
                     },
                     child: const Text('Export Week'))),
               ]),
+              const SizedBox(height: 8),
+              SizedBox(width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.table_chart_outlined, size: 16),
+                  label: const Text('Export CSV (full candle sequence)'),
+                  onPressed: () async {
+                    final e = await JournalDb.instance
+                        .getEntriesForDay(_asset, _tf, _selDay!);
+                    final csv = generateFullCsv(e, _asset, _tf);
+                    shareTextFile(csv, '${_asset}_${_tf}_${_key(_selDay!)}.csv');
+                  },
+                ),
+              ),
             ]),
           ),
         )
@@ -232,8 +244,7 @@ class _JournalPageState extends State<JournalPage> {
 // ─────────────────────────────────────────────────────────────────────────────
 class _CandleCard extends StatelessWidget {
   final JournalEntry entry;
-  final bool isVix;
-  const _CandleCard({required this.entry, required this.isVix});
+  const _CandleCard({required this.entry});
 
   @override
   Widget build(BuildContext context) {
@@ -342,11 +353,7 @@ class _CandleCard extends StatelessWidget {
                   ? AppColors.red
                   : entry.stochLabel == 'OVERSOLD'
                   ? const Color(0xFF47F05F) : AppColors.textMuted),
-          _indChip(isVix ? 'MA CROSS' : 'MINIMAX',
-              '${entry.mmmDelta >= 0 ? '+' : ''}${entry.mmmDelta.toStringAsFixed(5)}  ${entry.mmmDir}',
-              entry.mmmDir == 'BEARISH' ? AppColors.red : const Color(0xFF47F05F)),
-          if (!isVix)
-            _indChip('SPIKE#', '${entry.candlesSinceSpike}c', AppColors.textDim),
+          _indChip('SPIKE#', '${entry.candlesSinceSpike}c', AppColors.textDim),
         ]),
       ]),
     );

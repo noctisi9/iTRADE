@@ -78,6 +78,38 @@ class SoundService {
     _pushNotification(asset: asset, direction: direction);
   }
 
+  // ── Invalidation alert: signal fired then reversed before you closed it ──
+  // Fires when indicators flip back to WAIT while a signal was still armed —
+  // a warning that the setup no longer holds, distinct from the entry alert.
+  void invalidationAlert({required String asset, required String wasDirection}) {
+    _play(_tickPlayer, 'sounds/beep_900.wav');
+    _pushInvalidationNotification(asset: asset, wasDirection: wasDirection);
+  }
+
+  Future<void> _pushInvalidationNotification({
+    required String asset,
+    required String wasDirection,
+  }) async {
+    if (!_notifReady) return;
+    const androidDetails = AndroidNotificationDetails(
+      'itrade_invalidations',
+      'iTRADE Signal Invalidations',
+      channelDescription: 'Alerts when an armed iTRADE signal reverses',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: false,
+      enableVibration: true,
+      icon: '@mipmap/ic_launcher',
+    );
+    const details = NotificationDetails(android: androidDetails);
+    await _notif.show(
+      (asset.hashCode ^ 0x5A5A5A) & 0x7FFFFFFF,
+      '⚠️ $asset — SIGNAL INVALIDATED',
+      'The $wasDirection setup reversed before close. NOCTIS iTRADE',
+      details,
+    );
+  }
+
   // ── Push notification ────────────────────────────────────────────────────
   Future<void> _pushNotification({
     required String asset,

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'pages/backtest_page.dart';
+import 'pages/dashboard_page.dart';
 import 'pages/history_page.dart';
 import 'pages/indicators_page.dart';
 import 'pages/intro_page.dart';
 import 'pages/journal_page.dart';
+import 'pages/risk_calculator_page.dart';
 import 'pages/signals_page.dart';
+import 'services/background_service.dart';
 import 'services/deriv_feed.dart';
 import 'services/journal_db.dart';
 import 'services/sound_service.dart';
@@ -22,6 +26,7 @@ class _AppShellState extends State<AppShell> {
   bool    _introDone  = false;
   bool    _restoring  = true;
   bool    _soundOn    = true;
+  bool    _bgServiceOn = false;
   AppView _view       = AppView.signals;
   String  _activeAsset   = kAssets.first;
   String  _journalAsset  = kAssets.first;
@@ -43,6 +48,7 @@ class _AppShellState extends State<AppShell> {
         _tf       = kGranularities.containsKey(s['timeframe'])
             ? s['timeframe'] as String : '1m';
         _soundOn  = (s['soundOn'] as int? ?? 1) == 1;
+        _bgServiceOn = (s['bgServiceOn'] as int? ?? 0) == 1;
         _introDone = true;
       }
       _restoring = false;
@@ -53,11 +59,22 @@ class _AppShellState extends State<AppShell> {
   void _persist() => JournalDb.instance.saveState(
     view: _view.name, activeAsset: _activeAsset,
     journalAsset: _journalAsset, timeframe: _tf, soundOn: _soundOn,
+    bgServiceOn: _bgServiceOn,
   );
 
   void _toggleSound() {
     setState(() => _soundOn = !_soundOn);
     SoundService.instance.setMuted(!_soundOn);
+    _persist();
+  }
+
+  void _toggleBgService() {
+    setState(() => _bgServiceOn = !_bgServiceOn);
+    if (_bgServiceOn) {
+      BackgroundServiceManager.instance.start();
+    } else {
+      BackgroundServiceManager.instance.stop();
+    }
     _persist();
   }
 
@@ -133,6 +150,22 @@ class _AppShellState extends State<AppShell> {
           _NavTile(Icons.history_rounded, 'History',
               _view == AppView.history, () => _setView(AppView.history)),
           const Divider(height: 1, color: AppColors.border),
+          _NavTile(Icons.grid_view_rounded, 'Dashboard', false, () {
+            Navigator.of(context).maybePop();
+            Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const DashboardPage()));
+          }),
+          _NavTile(Icons.query_stats_rounded, 'Backtest', false, () {
+            Navigator.of(context).maybePop();
+            Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const BacktestPage()));
+          }),
+          _NavTile(Icons.calculate_rounded, 'Risk Calculator', false, () {
+            Navigator.of(context).maybePop();
+            Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const RiskCalculatorPage()));
+          }),
+          const Divider(height: 1, color: AppColors.border),
           // ── Sound toggle — ONLY here, not in top bar ──
           ListTile(
             leading: Icon(
@@ -143,6 +176,22 @@ class _AppShellState extends State<AppShell> {
                     color: _soundOn ? AppColors.red : AppColors.textDim,
                     fontSize: 14)),
             onTap: _toggleSound,
+          ),
+          // ── Background persistence toggle ──
+          ListTile(
+            leading: Icon(
+              _bgServiceOn ? Icons.wifi_tethering_rounded : Icons.wifi_tethering_off_rounded,
+              color: _bgServiceOn ? AppColors.red : AppColors.textDim, size: 20),
+            title: Text(_bgServiceOn ? 'Keep Live in Background: ON'
+                    : 'Keep Live in Background: OFF',
+                style: TextStyle(
+                    color: _bgServiceOn ? AppColors.red : AppColors.textDim,
+                    fontSize: 14)),
+            subtitle: const Text(
+                'On some phones (Samsung/Xiaomi) you must also allow '
+                '"never sleep" for this app in battery settings.',
+                style: TextStyle(fontSize: 10, color: AppColors.textMuted)),
+            onTap: _toggleBgService,
           ),
           const Spacer(),
           const Padding(

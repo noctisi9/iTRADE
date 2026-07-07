@@ -56,8 +56,7 @@ List<String> _buildIndicatorLines(List<JournalEntry> entries) {
     final acStr  = '${e.ac >= 0 ? '+' : ''}${e.ac.toStringAsFixed(5)}';
     lines.add('[$t] CANDLE ${e.candleNum}  |  movement: ${e.movement.toStringAsFixed(5)}');
     lines.add('        AO: $aoStr [${_aoTag(e.ao)}]  |  AC: $acStr [${_acTag(e.ac)}]');
-    lines.add('        Stoch K: ${e.stochK.toStringAsFixed(2)} [${e.stochLabel}]  |  '
-        '${e.timeframe.toUpperCase()} 4th node: ${e.mmmDelta.toStringAsFixed(6)} [${e.mmmDir}]');
+    lines.add('        Stoch K: ${e.stochK.toStringAsFixed(2)} [${e.stochLabel}]');
     lines.add('        Risk Score: ${e.riskPct}%  |  Signal: ${e.signal}  |  '
         'Candles since spike: ${e.candlesSinceSpike}');
     lines.add('');
@@ -107,4 +106,40 @@ Future<void> shareTextFile(String content, String filename) async {
   final file = File('${dir.path}/$filename');
   await file.writeAsString(content);
   await Share.shareXFiles([XFile(file.path)], text: filename);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Real comma-separated CSV — full candle sequence (O/H/L/C) plus every
+// indicator reading, one row per candle. This is genuine CSV (opens
+// correctly in Excel/Sheets), distinct from the formatted text reports
+// above which are for human reading, not spreadsheet import.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _csvHeader = [
+  'candle_num', 'date_utc', 'time_utc', 'epoch',
+  'open', 'high', 'low', 'close', 'movement', 'spike',
+  'ao', 'ac', 'stoch_k', 'stoch_label',
+  'risk_score', 'signal', 'candles_since_spike',
+];
+
+String _csvEscape(String v) =>
+    v.contains(',') || v.contains('"') || v.contains('\n')
+        ? '"${v.replaceAll('"', '""')}"' : v;
+
+String generateFullCsv(List<JournalEntry> entries, String asset, String tf) {
+  final rows = <String>[_csvHeader.join(',')];
+  for (final e in entries) {
+    final d = DateTime.fromMillisecondsSinceEpoch(e.epoch * 1000, isUtc: true);
+    final dateStr = '${d.year}-${_pad(d.month)}-${_pad(d.day)}';
+    rows.add([
+      e.candleNum, dateStr, _hhmm(e.epoch), e.epoch,
+      e.open.toStringAsFixed(5), e.high.toStringAsFixed(5),
+      e.low.toStringAsFixed(5), e.close.toStringAsFixed(5),
+      e.movement.toStringAsFixed(5), e.spike ? '1' : '0',
+      e.ao.toStringAsFixed(5), e.ac.toStringAsFixed(5),
+      e.stochK.toStringAsFixed(2), _csvEscape(e.stochLabel),
+      e.riskPct, _csvEscape(e.signal), e.candlesSinceSpike,
+    ].join(','));
+  }
+  return rows.join('\n');
 }

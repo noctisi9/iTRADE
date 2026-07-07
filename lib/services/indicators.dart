@@ -3,9 +3,15 @@ import '../models/candle.dart';
 
 const Map<String, String> assetSymbol = {
   'BOOM1000': 'BOOM1000',
+  'BOOM900':  'BOOM900',
+  'BOOM600':  'BOOM600',
+  'BOOM500':  'BOOM500',
+  'BOOM300':  'BOOM300',
   'CRASH1000': 'CRASH1000',
-  'VIX75': 'R_75',
-  'VIX75 1s': '1HZ75V',
+  'CRASH900':  'CRASH900',
+  'CRASH600':  'CRASH600',
+  'CRASH500':  'CRASH500',
+  'CRASH300':  'CRASH300',
 };
 
 List<double> smaArr(List<double> values, int period) {

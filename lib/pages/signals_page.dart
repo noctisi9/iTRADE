@@ -9,6 +9,7 @@ import '../services/journal_db.dart';
 import '../services/sound_service.dart';
 import '../theme.dart';
 import '../widgets/candle_chart.dart';
+import '../widgets/confluence_bar.dart';
 import '../widgets/pulsing_dot.dart';
 
 enum SignalDirection { none, buy, sell }
@@ -232,7 +233,10 @@ class _AssetViewState extends State<_AssetView> {
         SoundService.instance.signalAlert(
             asset: widget.asset, direction: newSig);
       } else if (newSig == 'WAIT' && _activeSignal != 'WAIT') {
-        // Session closed
+        // Session closed — indicators reversed before a manual close.
+        // This is exactly the "signal invalidated" case: alert the user.
+        SoundService.instance.invalidationAlert(
+            asset: widget.asset, wasDirection: _activeSignal);
         _closeSession(candles);
         _activeSignal = 'WAIT';
       } else if (newSig != 'WAIT') {
@@ -269,8 +273,6 @@ class _AssetViewState extends State<_AssetView> {
       ac:        g?.ac ?? 0,
       stochK:    g?.stochK ?? 50,
       stochLabel: g?.stochLabel ?? 'NEUTRAL',
-      mmmDelta:  g?.mmmDelta ?? 0,
-      mmmDir:    g?.fourthSubVal ?? 'NEUTRAL',
       riskPct:   g?.score ?? 0,
       signal:    g?.signal ?? 'WAIT',
       candlesSinceSpike: g?.candlesSinceSpike ?? 0,
@@ -438,9 +440,14 @@ class _AssetViewState extends State<_AssetView> {
           const SizedBox(height: 8),
 
           // ── Summary line ──
-          Text(_summaryLine(),
-              style: const TextStyle(fontSize: 11,
-                  fontFamily: 'monospace', color: AppColors.textDim)),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Expanded(
+              child: Text(_summaryLine(),
+                  style: const TextStyle(fontSize: 11,
+                      fontFamily: 'monospace', color: AppColors.textDim)),
+            ),
+            if (g != null) ConfluenceBar(count: g.confluenceCount, dir: g.confluenceDir),
+          ]),
           const SizedBox(height: 8),
 
           // ── Signal pill ──
