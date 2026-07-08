@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'pages/backtest_page.dart';
-import 'pages/dashboard_page.dart';
 import 'pages/history_page.dart';
 import 'pages/indicators_page.dart';
 import 'pages/intro_page.dart';
 import 'pages/journal_page.dart';
-import 'pages/risk_calculator_page.dart';
 import 'pages/signals_page.dart';
 import 'services/background_service.dart';
 import 'services/deriv_feed.dart';
@@ -150,20 +148,10 @@ class _AppShellState extends State<AppShell> {
           _NavTile(Icons.history_rounded, 'History',
               _view == AppView.history, () => _setView(AppView.history)),
           const Divider(height: 1, color: AppColors.border),
-          _NavTile(Icons.grid_view_rounded, 'Dashboard', false, () {
-            Navigator.of(context).maybePop();
-            Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const DashboardPage()));
-          }),
           _NavTile(Icons.query_stats_rounded, 'Backtest', false, () {
             Navigator.of(context).maybePop();
             Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const BacktestPage()));
-          }),
-          _NavTile(Icons.calculate_rounded, 'Risk Calculator', false, () {
-            Navigator.of(context).maybePop();
-            Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const RiskCalculatorPage()));
           }),
           const Divider(height: 1, color: AppColors.border),
           // ── Sound toggle — ONLY here, not in top bar ──

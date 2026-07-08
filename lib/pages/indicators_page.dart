@@ -299,26 +299,6 @@ class _GardenViewport extends StatelessWidget {
               const Text('/ 100',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500,
                       color: AppColors.textMuted)),
-              const SizedBox(height: 2),
-              // Confidence trend — momentum of confluence over last 5 candles
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(
-                  g.scoreTrend == 'RISING'  ? Icons.trending_up
-                      : g.scoreTrend == 'FALLING' ? Icons.trending_down
-                      : Icons.trending_flat,
-                  size: 13,
-                  color: g.scoreTrend == 'RISING'  ? const Color(0xFF27AE60)
-                      : g.scoreTrend == 'FALLING' ? AppColors.red
-                      : AppColors.textMuted,
-                ),
-                const SizedBox(width: 3),
-                Text(g.scoreTrend,
-                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5,
-                        color: g.scoreTrend == 'RISING'  ? const Color(0xFF27AE60)
-                            : g.scoreTrend == 'FALLING' ? AppColors.red
-                            : AppColors.textMuted)),
-              ]),
             ]),
           ),
         ]),

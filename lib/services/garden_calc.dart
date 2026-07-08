@@ -65,12 +65,6 @@ class GardenResult {
 
   // Composite score 0–100
   final int    score;
-  final String scoreTrend;  // 'RISING' | 'FALLING' | 'FLAT' — momentum over last 5 candles
-
-  // Confluence — how many of the 3 indicators (AO, AC, Stoch) currently
-  // point the same direction, 0–3. Shown as a strength bar in the UI.
-  final int    confluenceCount;
-  final String confluenceDir; // 'BULLISH' | 'BEARISH' | 'MIXED'
 
   // Signal
   final String signal;    // 'BUY' | 'SELL' | 'WAIT'
@@ -93,9 +87,6 @@ class GardenResult {
     required this.stochAscending,
     required this.stochLabel,
     required this.score,
-    required this.scoreTrend,
-    required this.confluenceCount,
-    required this.confluenceDir,
     required this.signal,
     required this.dirLabel,
     required this.armed,
@@ -111,7 +102,6 @@ class GardenState {
   final List<double> _aoH     = [];
   final List<double> _acH     = [];
   final List<double> _slowKH  = [];  // slowed K history for D calculation
-  final List<int>    _scoreH  = [];  // last 5 composite scores, for trend
 
   GardenResult? compute(List<Candle> candles, String asset) {
     if (candles.length < 40) return null;
@@ -182,18 +172,6 @@ class GardenState {
         .round()
         .clamp(0, 100);
 
-    // ── Confidence trend — momentum of the composite score over last 5 candles ─
-    // Not just "is it 70 right now" but "is confluence building or fading".
-    _scoreH.add(score);
-    if (_scoreH.length > 5) _scoreH.removeAt(0);
-    final String scoreTrend;
-    if (_scoreH.length < 3) {
-      scoreTrend = 'FLAT';
-    } else {
-      final delta = _scoreH.last - _scoreH.first;
-      scoreTrend = delta > 4 ? 'RISING' : delta < -4 ? 'FALLING' : 'FLAT';
-    }
-
     // ── Signal — exact MT5 conditions ────────────────────────────────────────
     final String signal;
     switch (type) {
@@ -217,20 +195,6 @@ class GardenState {
         : signal == 'BUY'  ? 'BUY · SIGNAL'
         : 'SCANNING…';
 
-    // ── Confluence — how many of AO/AC/Stoch agree on direction ─────────────
-    // Bullish lean: AO>0, AC>0, stochK>50. Bearish lean: the opposite.
-    // Counted independently of the armed signal, so it's useful even while
-    // still "SCANNING" — shows confluence building before the full signal fires.
-    final aoBull    = ao > 0;
-    final acBull    = ac > 0;
-    final stochBull = stochK > 50;
-    final bullVotes = [aoBull, acBull, stochBull].where((v) => v).length;
-    final bearVotes = 3 - bullVotes;
-    final confluenceCount = bullVotes >= bearVotes ? bullVotes : bearVotes;
-    final confluenceDir   = bullVotes > bearVotes ? 'BULLISH'
-        : bearVotes > bullVotes ? 'BEARISH'
-        : 'MIXED';
-
     // ── Candles since spike ───────────────────────────────────────────────────
     final candlesSinceSpike = calcSpikeStats(candles)?.sequenceCount ?? 0;
 
@@ -240,8 +204,7 @@ class GardenState {
       stochK: stochK, stochD: stochD,
       stochDescending: stochDescending, stochAscending: stochAscending,
       stochLabel: stochLabel,
-      score: score, scoreTrend: scoreTrend,
-      confluenceCount: confluenceCount, confluenceDir: confluenceDir,
+      score: score,
       signal: signal, dirLabel: dirLabel, armed: armed,
       candlesSinceSpike: candlesSinceSpike,
     );

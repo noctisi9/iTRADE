@@ -9,7 +9,6 @@ import '../services/journal_db.dart';
 import '../services/sound_service.dart';
 import '../theme.dart';
 import '../widgets/candle_chart.dart';
-import '../widgets/confluence_bar.dart';
 import '../widgets/pulsing_dot.dart';
 
 enum SignalDirection { none, buy, sell }
@@ -440,14 +439,9 @@ class _AssetViewState extends State<_AssetView> {
           const SizedBox(height: 8),
 
           // ── Summary line ──
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Expanded(
-              child: Text(_summaryLine(),
-                  style: const TextStyle(fontSize: 11,
-                      fontFamily: 'monospace', color: AppColors.textDim)),
-            ),
-            if (g != null) ConfluenceBar(count: g.confluenceCount, dir: g.confluenceDir),
-          ]),
+          Text(_summaryLine(),
+              style: const TextStyle(fontSize: 11,
+                  fontFamily: 'monospace', color: AppColors.textDim)),
           const SizedBox(height: 8),
 
           // ── Signal pill ──

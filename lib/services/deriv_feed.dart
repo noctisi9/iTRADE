@@ -270,7 +270,7 @@ class DerivFeed {
       _candles[key] = _markSpikes(symbol, list);
       _lastEpoch[key] = list.last.epoch;
       _emit(key);
-      unawaited(JournalDb.instance.saveCandles(symbol, matchedTf, [fresh]));
+      unawaited(JournalDb.instance.saveCandles(symbol, matchedTf!, [fresh]));
     }
   }
 
