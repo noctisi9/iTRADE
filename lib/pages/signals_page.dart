@@ -54,43 +54,49 @@ class _SignalsPageState extends State<SignalsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isLandscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
+
     return Column(
       children: [
-        // ── Timeframe selector ──
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: kGranularities.keys.map((tf) {
-              final active = tf == _tf;
-              return GestureDetector(
-                onTap: () {
-                  setState(() => _tf = tf);
-                  widget.onTfChanged(tf);
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: active ? AppColors.red : AppColors.cardAlt,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                        color: active ? AppColors.red : AppColors.border),
+        // ── Timeframe selector — portrait only. In landscape all 3
+        // timeframes are shown at once, so there's nothing to pick. ──
+        if (!isLandscape) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: kGranularities.keys.map((tf) {
+                final active = tf == _tf;
+                return GestureDetector(
+                  onTap: () {
+                    setState(() => _tf = tf);
+                    widget.onTfChanged(tf);
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: active ? AppColors.red : AppColors.cardAlt,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: active ? AppColors.red : AppColors.border),
+                    ),
+                    child: Text(tf,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.4,
+                          color: active ? Colors.white : AppColors.textDim,
+                        )),
                   ),
-                  child: Text(tf,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.4,
-                        color: active ? Colors.white : AppColors.textDim,
-                      )),
-                ),
-              );
-            }).toList(),
+                );
+              }).toList(),
+            ),
           ),
-        ),
-        const SizedBox(height: 6),
+          const SizedBox(height: 6),
+        ],
 
         // ── Asset page view ──
         Expanded(
@@ -104,12 +110,18 @@ class _SignalsPageState extends State<SignalsPage> {
                   setState(() => _page = i);
                   widget.onAssetChanged(kAssets[i]);
                 },
-                itemBuilder: (_, i) => _AssetView(
-                  key: ValueKey('${kAssets[i]}_$_tf'),
-                  asset: kAssets[i],
-                  tf: _tf,
-                  onOpenEngines: widget.onOpenEngines,
-                ),
+                itemBuilder: (_, i) => isLandscape
+                    ? _LandscapeTriView(
+                        key: ValueKey('${kAssets[i]}_landscape'),
+                        asset: kAssets[i],
+                        onOpenEngines: widget.onOpenEngines,
+                      )
+                    : _AssetView(
+                        key: ValueKey('${kAssets[i]}_$_tf'),
+                        asset: kAssets[i],
+                        tf: _tf,
+                        onOpenEngines: widget.onOpenEngines,
+                      ),
               ),
               Positioned(
                 left: 0, right: 0, bottom: 10,
@@ -141,18 +153,54 @@ class _SignalsPageState extends State<SignalsPage> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Landscape view — same asset, all 3 timeframes side by side instead of
+// picking one from the top selector. Each column is the exact same
+// _AssetView used in portrait (same chart, same signal pill, same
+// everything) — just three of them at once, one per timeframe.
+// ─────────────────────────────────────────────────────────────────────────────
+class _LandscapeTriView extends StatelessWidget {
+  final String asset;
+  final void Function(String) onOpenEngines;
+
+  const _LandscapeTriView({
+    super.key,
+    required this.asset,
+    required this.onOpenEngines,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: kGranularities.keys.map((tf) {
+        return Expanded(
+          child: _AssetView(
+            key: ValueKey('${asset}_${tf}_landscape'),
+            asset: asset,
+            tf: tf,
+            onOpenEngines: onOpenEngines,
+            tfBadge: tf,
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Per-asset view — one instance per asset×timeframe combo
 // ─────────────────────────────────────────────────────────────────────────────
 class _AssetView extends StatefulWidget {
   final String asset;
   final String tf;
   final void Function(String) onOpenEngines;
+  final String? tfBadge; // shown only in landscape's 3-column view
 
   const _AssetView({
     super.key,
     required this.asset,
     required this.tf,
     required this.onOpenEngines,
+    this.tfBadge,
   });
 
   @override
@@ -366,10 +414,26 @@ class _AssetViewState extends State<_AssetView> {
           // ── Asset header ──
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(widget.asset,
-                  style: const TextStyle(fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.6, color: AppColors.text)),
+              Row(children: [
+                Text(widget.asset,
+                    style: const TextStyle(fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.6, color: AppColors.text)),
+                if (widget.tfBadge != null) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppColors.redFaint,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(widget.tfBadge!,
+                        style: const TextStyle(fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1, color: AppColors.red)),
+                  ),
+                ],
+              ]),
               Row(children: [
                 Text(live != null ? live.toStringAsFixed(3) : '—',
                     style: const TextStyle(
