@@ -3,38 +3,28 @@ import '../models/candle.dart';
 import 'indicators.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// garden_calc.dart — production engine built from MT5 screenshots
+// garden_calc.dart — production engine v4
 //
-// Stoch(25, 5, 8)  — K period=25, slowing=5, D period=8
+// Stoch(25, 5, 8)
 //   Raw %K   = (Close − LowestLow_25) / (HighestHigh_25 − LowestLow_25) × 100
-//   Slowed K = SMA(rawK, 5)      ← the %K line shown on MT5
-//   %D       = SMA(slowedK, 8)   ← the signal line shown on MT5
+//   Slowed K = SMA(rawK, 5)
+//   %D       = SMA(slowedK, 8)
 //
 // AO = SMA(hl2, 5) − SMA(hl2, 34)
-//   Bar rising  (AO > prev AO) = orange
-//   Bar falling (AO < prev AO) = black
-//   Level lines at 20 and 80
-//
 // AC = AO − SMA(AO, 5)
-//   Bar rising  = orange
-//   Bar falling = black
-//   No level lines
 //
-// ── Signal conditions (from MT5 screenshots) ──────────────────────────────
+// Signal conditions:
+//   BOOM SELL: AO<0 AND AC<0 AND stochK<20 AND stochDescending
+//   CRASH BUY: AO>0 AND AC>0 AND stochK>80 AND stochAscending
 //
-// BOOM SELL (counter-spike):
-//   AO < 0 AND AC < 0 AND stochK < 20 AND K < D
-//   (BOOM Image 3,4,7: K=0.92, D=1.61; AO=-30.76, AC=-2.42)
+// Score: purely from indicator alignment (0–100)
+//   stochScore = distance from 50, 0–50 pts
+//   aoScore    = 25 if AO in correct direction
+//   acScore    = 25 if AC in correct direction
 //
-// CRASH BUY (counter-spike):
-//   AO > 0 AND AC > 0 AND stochK > 80 AND K > D
-//
-// ── Score ─────────────────────────────────────────────────────────────────
-// Driven primarily by Stoch distance from neutral (50):
-//   stochScore  = |K − 50| / 50 × 50      (0–50 pts)
-//   aoScore     = ao aligned with signal ? 25 : 0
-//   acScore     = ac aligned with signal ? 25 : 0
-//   total clamped 0–100
+// Risk meaning: LOW risk = conditions fully met (overbought/oversold + aligned)
+//               HIGH risk = waiting for alignment (conditions not met = higher
+//               uncertainty). Score 100 = fully aligned = lowest risk trade.
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum AssetType { boom, crash }
@@ -44,34 +34,28 @@ AssetType assetType(String asset) {
   return AssetType.crash;
 }
 
-// ── Result ────────────────────────────────────────────────────────────────────
 class GardenResult {
-  // AO
   final double ao;
-  final bool   aoRising;      // current AO bar is orange (ao > prevAo)
-  final double aoPct;         // distance from zero as % of recent max, 0–100
+  final bool   aoRising;
+  final double aoPct;
 
-  // AC
   final double ac;
-  final bool   acRising;      // current AC bar is orange
+  final bool   acRising;
   final double acPct;
 
-  // Stoch(25,5,8)
-  final double stochK;        // slowed K = SMA(rawK,5)
-  final double stochD;        // D = SMA(slowedK,8)
-  final bool   stochDescending; // K < D
-  final bool   stochAscending;  // K > D
-  final String stochLabel;    // 'OVERBOUGHT' | 'OVERSOLD' | 'NEUTRAL'
+  final double stochK;
+  final double stochD;
+  final bool   stochDescending;
+  final bool   stochAscending;
+  final String stochLabel;     // 'OVERBOUGHT' | 'OVERSOLD' | 'NEUTRAL'
+  // Stochastic direction context for display
+  final String stochTrend;     // 'RISING ▲' | 'FALLING ▼' | 'FLAT'
 
-  // Composite score 0–100
   final int    score;
-
-  // Signal
-  final String signal;    // 'BUY' | 'SELL' | 'WAIT'
+  final String signal;
   final String dirLabel;
   final bool   armed;
 
-  // BOOM/CRASH spike tracking
   final int    candlesSinceSpike;
 
   const GardenResult({
@@ -86,6 +70,7 @@ class GardenResult {
     required this.stochDescending,
     required this.stochAscending,
     required this.stochLabel,
+    required this.stochTrend,
     required this.score,
     required this.signal,
     required this.dirLabel,
@@ -94,20 +79,18 @@ class GardenResult {
   });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GardenState — one per asset×timeframe, holds rolling histories
-// ─────────────────────────────────────────────────────────────────────────────
 class GardenState {
-  // Rolling histories (300 bars max)
-  final List<double> _aoH     = [];
-  final List<double> _acH     = [];
-  final List<double> _slowKH  = [];  // slowed K history for D calculation
+  final List<double> _aoH    = [];
+  final List<double> _acH    = [];
+  final List<double> _slowKH = [];
+  double? _prevStochK;
 
   GardenResult? compute(List<Candle> candles, String asset) {
+    // Need minimum 40 candles for stable SMA(34)
     if (candles.length < 40) return null;
     final type = assetType(asset);
 
-    // ── AO = SMA(hl2,5) − SMA(hl2,34) ───────────────────────────────────────
+    // ── AO ───────────────────────────────────────────────────────────────────
     final aoSeries = calcAO(candles);
     if (aoSeries.isEmpty) return null;
     final aoRaw = aoSeries.last;
@@ -116,7 +99,7 @@ class GardenState {
     final aoRising = _aoH.isNotEmpty && ao > _aoH.last;
     _push(_aoH, ao);
 
-    // ── AC = AO − SMA(AO,5) ──────────────────────────────────────────────────
+    // ── AC ───────────────────────────────────────────────────────────────────
     final acSeries = calcAC(aoSeries);
     if (acSeries.isEmpty) return null;
     final acRaw = acSeries.last;
@@ -126,76 +109,80 @@ class GardenState {
     _push(_acH, ac);
 
     // ── Stoch(25, 5, 8) ───────────────────────────────────────────────────────
-    // Step 1: raw %K over 25-bar window
-    // Step 2: slowed K = SMA(rawK, 5)
-    // Step 3: D = SMA(slowedK, 8)
-    final stochResult = _calcStoch(candles);
-    if (stochResult == null) return null;
-    final stochK = stochResult.$1;
-    _push(_slowKH, stochK);
-    final stochD = _smaLast(_slowKH, 8);
-    if (stochD == null) return null;
+    final stochRaw = _calcStochK(candles);
+    if (stochRaw == null) return null;
+    _push(_slowKH, stochRaw);
 
-    final stochDescending = stochK < stochD;
-    final stochAscending  = stochK > stochD;
+    // D requires 8 slowed-K values. If we don't have 8 yet, use stochRaw as D.
+    // This prevents the engine from returning null during warm-up, but keeps
+    // signal conditions accurate (descending/ascending won't fire prematurely
+    // because K≈D when D is estimated).
+    final stochK = stochRaw;
+    final stochD = _slowKH.length >= 8
+        ? _smaLast(_slowKH, 8)!
+        : stochRaw; // fallback to K itself → no false K<D or K>D
+
+    final stochDescending = stochK < stochD - 0.5; // 0.5 hysteresis to avoid noise
+    final stochAscending  = stochK > stochD + 0.5;
+
     final stochLabel = stochK > 80 ? 'OVERBOUGHT'
-        : stochK < 20              ? 'OVERSOLD'
-        :                            'NEUTRAL';
+        : stochK < 20             ? 'OVERSOLD'
+        :                           'NEUTRAL';
 
-    // ── Distance-from-zero % (ring fill for AO and AC nodes) ─────────────────
+    // Stoch trend vs previous K
+    final String stochTrend;
+    if (_prevStochK == null) {
+      stochTrend = 'FLAT';
+    } else if (stochK > _prevStochK! + 0.3) {
+      stochTrend = 'RISING ▲';
+    } else if (stochK < _prevStochK! - 0.3) {
+      stochTrend = 'FALLING ▼';
+    } else {
+      stochTrend = 'FLAT';
+    }
+    _prevStochK = stochK;
+
+    // ── Ring fill percentages ─────────────────────────────────────────────────
     final aoPct = _distPct(ao, _aoH);
     final acPct = _distPct(ac, _acH);
 
-    // safe guard: AO and AC must be meaningfully non-zero
-    final safe = aoPct > 8 && acPct > 8;
+    // Relaxed safe guard — require at least a tiny move (2% of recent range)
+    // Removes false blocking during first few candles of a new session
+    final safe = aoPct > 2 && acPct > 2;
 
-    // ── Score — Stoch-primary, 0–100 ─────────────────────────────────────────
+    // ── Score ─────────────────────────────────────────────────────────────────
+    // Score = how aligned all indicators are toward a valid trade.
+    // Score 100 = fully aligned = low-risk high-confidence trade.
+    // Score 0   = no alignment  = do not trade.
     //
-    // Stoch is the primary driver because it directly shows overbought/oversold.
-    // stochScore: distance of K from 50, normalised to 50 pts
-    //   K=0   → 50 pts, K=50 → 0 pts, K=100 → 50 pts
-    // aoScore:    25 if AO matches expected direction
-    // acScore:    25 if AC matches expected direction
+    // For BOOM (SELL setup): AO<0, AC<0, Stoch oversold and descending
+    // For CRASH (BUY setup): AO>0, AC>0, Stoch overbought and ascending
+    final stochScore = (stochK - 50).abs() / 50 * 50; // 0–50
 
-    final stochScore = (stochK - 50).abs() / 50 * 50;
+    final isBearish = type == AssetType.boom;  // BOOM wants bearish
+    final isBullish = type == AssetType.crash; // CRASH wants bullish
 
-    // Determine expected direction from Stoch + AO alignment
-    final isBearishSetup = stochK < 50 && ao < 0;
-    final isBullishSetup = stochK > 50 && ao > 0;
+    final aoScore = (isBearish && ao < 0) || (isBullish && ao > 0) ? 25.0 : 0.0;
+    final acScore = (isBearish && ac < 0) || (isBullish && ac > 0) ? 25.0 : 0.0;
 
-    final aoScore = (isBearishSetup && ao < 0) || (isBullishSetup && ao > 0)
-        ? 25.0 : 0.0;
-    final acScore = (isBearishSetup && ac < 0) || (isBullishSetup && ac > 0)
-        ? 25.0 : 0.0;
+    final score = (stochScore + aoScore + acScore).round().clamp(0, 100);
 
-    final score = (stochScore + aoScore + acScore)
-        .round()
-        .clamp(0, 100);
-
-    // ── Signal — exact MT5 conditions ────────────────────────────────────────
+    // ── Signal ────────────────────────────────────────────────────────────────
     final String signal;
     switch (type) {
       case AssetType.boom:
-        // SELL only — counter-spike strategy
-        // MT5 confirmation: AO<0, AC<0, K<20 (oversold), K<D (descending)
-        signal = (ao < 0 && ac < 0 && safe && stochK < 20 &&
-                stochDescending)
+        signal = (ao < 0 && ac < 0 && safe && stochK < 20 && stochDescending)
             ? 'SELL' : 'WAIT';
-
       case AssetType.crash:
-        // BUY only — counter-spike strategy
-        // Mirror of BOOM: AO>0, AC>0, K>80 (overbought), K>D (ascending)
-        signal = (ao > 0 && ac > 0 && safe && stochK > 80 &&
-                stochAscending)
+        signal = (ao > 0 && ac > 0 && safe && stochK > 80 && stochAscending)
             ? 'BUY' : 'WAIT';
     }
 
     final armed    = signal != 'WAIT';
     final dirLabel = signal == 'SELL' ? 'SELL · SIGNAL'
-        : signal == 'BUY'  ? 'BUY · SIGNAL'
+        : signal == 'BUY' ? 'BUY · SIGNAL'
         : 'SCANNING…';
 
-    // ── Candles since spike ───────────────────────────────────────────────────
     final candlesSinceSpike = calcSpikeStats(candles)?.sequenceCount ?? 0;
 
     return GardenResult(
@@ -203,16 +190,15 @@ class GardenState {
       ac: ac, acRising: acRising, acPct: acPct,
       stochK: stochK, stochD: stochD,
       stochDescending: stochDescending, stochAscending: stochAscending,
-      stochLabel: stochLabel,
+      stochLabel: stochLabel, stochTrend: stochTrend,
       score: score,
       signal: signal, dirLabel: dirLabel, armed: armed,
       candlesSinceSpike: candlesSinceSpike,
     );
   }
 
-  // ── Stoch(25, 5, 8) ──────────────────────────────────────────────────────
-  // Returns (slowedK, rawK) — D is computed externally from slowedK history
-  (double, double)? _calcStoch(List<Candle> candles) {
+  // ── Stoch(25, slowing=5) — returns slowed K ───────────────────────────────
+  double? _calcStochK(List<Candle> candles) {
     const kPeriod = 25, slowing = 5;
     const need = kPeriod + slowing - 1;
     if (candles.length < need) return null;
@@ -225,19 +211,17 @@ class GardenState {
       rawKs.add(hi == lo ? 50.0 : ((slice[i].c - lo) / (hi - lo)) * 100.0);
     }
     if (rawKs.length < slowing) return null;
-    final slowK = rawKs.sublist(rawKs.length - slowing)
+    return rawKs.sublist(rawKs.length - slowing)
         .fold(0.0, (a, b) => a + b) / slowing;
-    return (slowK, rawKs.last);
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
   void _push(List<double> list, double val) {
     list.add(val);
-    if (list.length > 300) list.removeAt(0);
+    if (list.length > 500) list.removeAt(0);
   }
 
   double _distPct(double val, List<double> hist) {
-    if (hist.isEmpty) return 0;
+    if (hist.length < 2) return 0;
     final mx = hist.map((v) => v.abs()).fold(0.0, math.max);
     return mx == 0 ? 0 : math.min(100.0, val.abs() / mx * 100.0);
   }
@@ -251,10 +235,12 @@ class GardenState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Summary line helper — used by SignalsPage
+// Summary line for signals page chart
 // ─────────────────────────────────────────────────────────────────────────────
 String buildSummaryLine(GardenResult g, String asset) {
+  final type   = assetType(asset);
   final spikes = '${g.candlesSinceSpike} candles since spike';
-  final risk   = g.armed ? '  ·  RISK ${g.score}%' : '';
-  return '$spikes$risk';
+  final risk   = 'Score ${g.score}/100';
+  final sig    = g.armed ? ' · ${g.signal}' : '';
+  return '$spikes  ·  $risk$sig';
 }

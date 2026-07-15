@@ -68,6 +68,51 @@ class DerivFeed {
     return ctrl.stream;
   }
 
+  /// Pre-warm ALL assets × all timeframes on launch.
+  /// Loads SQLite cache for every symbol immediately so indicators are live
+  /// from the first frame regardless of which asset the user opens.
+  /// Staggered so first asset is instant, others load in background.
+  Future<void> preWarmAll(List<String> assets) async {
+    for (final asset in assets) {
+      final symbol = _assetSymbol(asset);
+      for (final tf in kGranularities.keys) {
+        final key = feedKey(symbol, tf);
+        if (_warmed.contains(key)) continue;
+        _warmed.add(key);
+        try {
+          final cached = await JournalDb.instance.loadCandles(
+              symbol, tf, limit: _maxCandles);
+          if (cached.isNotEmpty) {
+            _candles[key] = _markSpikes(symbol, cached);
+            _lastEpoch[key] = cached.last.epoch;
+            _emit(key);
+          }
+        } catch (_) {}
+        // Small pause between assets to avoid SQLite contention
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    }
+    // After all caches loaded, trigger live subscriptions for all
+    for (final asset in assets) {
+      final symbol = _assetSymbol(asset);
+      for (final tf in kGranularities.keys) {
+        _requested.putIfAbsent(tf, () => {});
+        if (!_requested[tf]!.contains(symbol)) {
+          _requested[tf]!.add(symbol);
+          _ensureConnected(tf);
+          _subscribe(symbol, tf);
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
+      }
+    }
+  }
+
+  String _assetSymbol(String asset) {
+    // Deriv WebSocket symbol = display name for BOOM/CRASH
+    // (no VIX anymore — all assets are BOOM/CRASH variants)
+    return asset;
+  }
+
   /// Loads any cached candles from SQLite first (near-instant, no network
   /// wait), emits them immediately, seeds _lastEpoch so the live subscribe
   /// gap-fills from exactly where we left off, then connects the WebSocket.

@@ -60,7 +60,8 @@ class _JournalPageState extends State<JournalPage> {
     final firstWd    = DateTime(_month.year, _month.month, 1).weekday % 7;
     final daysInMon  = DateTime(_month.year, _month.month + 1, 0).day;
 
-    return Column(children: [
+    return SingleChildScrollView(
+      child: Column(children: [
       // ── Asset + TF selectors ──
       Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
@@ -167,9 +168,8 @@ class _JournalPageState extends State<JournalPage> {
 
       // ── Day detail ──
       if (_selDay != null)
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 Text('${_selDay!.day} ${_months[_selDay!.month - 1]} ${_selDay!.year}',
@@ -230,8 +230,10 @@ class _JournalPageState extends State<JournalPage> {
           ),
         )
       else
-        const Expanded(child: Center(child: Text('Tap a day to view candles',
-            style: TextStyle(color: AppColors.textMuted, fontSize: 12)))),
+        const Padding(
+          padding: EdgeInsets.only(top: 40),
+          child: Center(child: Text('Tap a day to view candles',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 12)))),
     ]);
   }
 

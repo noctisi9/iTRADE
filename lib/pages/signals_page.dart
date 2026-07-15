@@ -477,23 +477,44 @@ class _AssetViewState extends State<_AssetView> {
                       ),
                     ),
                   ),
-                  // Risk badge
+                  // Chart info badge — candles since spike + score + signal
                   if (g != null)
-                    Positioned(left: 10, top: 10,
+                    Positioned(left: 8, top: 8,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
+                            horizontal: 9, vertical: 5),
                         decoration: BoxDecoration(
-                          color: _riskColor(g.score).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: _riskColor(g.score)
-                              .withValues(alpha: 0.4)),
+                          color: Colors.white.withValues(alpha: 0.92),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.border),
                         ),
-                        child: Text('${g.score}% RISK',
-                            style: TextStyle(fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                fontFamily: 'monospace',
-                                color: _riskColor(g.score))),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${g.candlesSinceSpike}c since spike',
+                              style: const TextStyle(fontSize: 9,
+                                  fontFamily: 'monospace',
+                                  color: AppColors.textDim),
+                            ),
+                            Text(
+                              'Score ${g.score}/100',
+                              style: TextStyle(fontSize: 9,
+                                  fontFamily: 'monospace',
+                                  fontWeight: FontWeight.bold,
+                                  color: _riskColor(g.score)),
+                            ),
+                            if (g.armed)
+                              Text(
+                                g.signal,
+                                style: const TextStyle(fontSize: 9,
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.red),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                 ]),

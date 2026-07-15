@@ -1,28 +1,16 @@
+import 'dart:async';
 import 'package:flutter_background_service/flutter_background_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BackgroundServiceManager
+// BackgroundServiceManager v2
 //
-// Wraps flutter_background_service to run a persistent Android foreground
-// service with a visible notification ("iTRADE — Live"), the same pattern
-// MetaTrader and other trading apps use to survive the phone being locked
-// or the app being backgrounded.
+// All operations wrapped in try-catch — NEVER crashes the main app even if
+// the background service fails (e.g. when battery optimization is disabled
+// on Samsung/Xiaomi which can trigger a force-stop during init).
 //
-// Important scope note: this keeps the OS from killing the app process, so
-// the existing DerivFeed WebSocket connections (running in the main
-// isolate) keep receiving data while the phone is locked. It does NOT
-// duplicate the trading logic into a separate isolate — that would mean
-// re-implementing DerivFeed/GardenState/JournalDb access across an isolate
-// boundary, which is a much larger refactor. For a single-device personal
-// trading tool, the foreground-service-keeps-process-alive approach is the
-// standard, well-supported pattern and is what's implemented here.
-//
-// Known device-level limitation (not fixable in code): some manufacturer
-// Android skins (Samsung One UI, Xiaomi MIUI, Huawei EMUI) aggressively
-// kill background processes regardless of foreground service status unless
-// the user manually exempts the app in battery settings. There is no way
-// to bypass this from the app itself — the user has to grant that exemption
-// on their device.
+// The service's only job is to keep the process alive while the phone is
+// locked so DerivFeed WebSocket stays connected. If it fails, the app
+// continues normally — the feed just disconnects when the screen locks.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class BackgroundServiceManager {
@@ -30,56 +18,78 @@ class BackgroundServiceManager {
   static final BackgroundServiceManager instance = BackgroundServiceManager._();
 
   bool _initialized = false;
+  bool _available   = true; // set false if bg service is unavailable on device
 
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
-
-    final service = FlutterBackgroundService();
-    await service.configure(
-      androidConfiguration: AndroidConfiguration(
-        onStart: _onStart,
-        autoStart: false,
-        isForegroundMode: true,
-        notificationChannelId: 'itrade_live',
-        initialNotificationTitle: 'iTRADE — Live',
-        initialNotificationContent: 'Keeping your live feed connected in the background',
-        foregroundServiceNotificationId: 9001,
-      ),
-      iosConfiguration: IosConfiguration(
-        autoStart: false,
-        onForeground: _onStart,
-      ),
-    );
+    try {
+      final service = FlutterBackgroundService();
+      await service.configure(
+        androidConfiguration: AndroidConfiguration(
+          onStart: _onStart,
+          autoStart: false,
+          isForegroundMode: true,
+          notificationChannelId: 'itrade_live',
+          initialNotificationTitle: 'iTRADE — Live',
+          initialNotificationContent: 'Signals active in background',
+          foregroundServiceNotificationId: 9001,
+          foregroundServiceTypes: [AndroidForegroundType.dataSync],
+        ),
+        iosConfiguration: IosConfiguration(
+          autoStart: false,
+          onForeground: _onStart,
+        ),
+      );
+    } catch (_) {
+      // Background service unavailable on this device — continue silently
+      _available = false;
+    }
   }
 
   Future<void> start() async {
-    final service = FlutterBackgroundService();
-    if (!await service.isRunning()) {
-      await service.startService();
+    if (!_available) return;
+    try {
+      final service = FlutterBackgroundService();
+      if (!await service.isRunning()) {
+        await service.startService();
+      }
+    } catch (_) {
+      _available = false;
     }
   }
 
   Future<void> stop() async {
-    final service = FlutterBackgroundService();
-    if (await service.isRunning()) {
-      service.invoke('stop');
+    if (!_available) return;
+    try {
+      final service = FlutterBackgroundService();
+      if (await service.isRunning()) {
+        service.invoke('stop');
+      }
+    } catch (_) {}
+  }
+
+  Future<bool> isRunning() async {
+    if (!_available) return false;
+    try {
+      return await FlutterBackgroundService().isRunning();
+    } catch (_) {
+      return false;
     }
   }
 
-  Future<bool> isRunning() => FlutterBackgroundService().isRunning();
+  bool get isAvailable => _available;
 
   @pragma('vm:entry-point')
   static void _onStart(ServiceInstance service) async {
-    if (service is AndroidServiceInstance) {
-      service.on('stop').listen((event) {
-        service.stopSelf();
-      });
-      // Keep the foreground notification alive. The actual live data
-      // connections run in the main app isolate (DerivFeed) — this
-      // service's only job is to hold a foreground presence so Android
-      // doesn't kill the whole process while the phone is locked.
-      service.setAsForegroundService();
+    try {
+      if (service is AndroidServiceInstance) {
+        service.on('stop').listen((_) => service.stopSelf());
+        await service.setAsForegroundService();
+      }
+    } catch (_) {
+      // If anything fails in the background isolate, stop gracefully
+      service.stopSelf();
     }
   }
 }
