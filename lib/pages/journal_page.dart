@@ -167,10 +167,13 @@ class _JournalPageState extends State<JournalPage> {
       const SizedBox(height: 8),
 
       // ── Day detail ──
-      if (_selDay != null)
+      if (_selDay != null) ...[
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 Text('${_selDay!.day} ${_months[_selDay!.month - 1]} ${_selDay!.year}',
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
@@ -178,19 +181,18 @@ class _JournalPageState extends State<JournalPage> {
                     style: const TextStyle(fontSize: 11, color: AppColors.textDim)),
               ]),
               const SizedBox(height: 8),
-
-              if (_loadingDay) const Center(child: CircularProgressIndicator())
+              if (_loadingDay)
+                const Center(child: CircularProgressIndicator())
               else if (_entries.isEmpty)
                 const Center(child: Text('No entries logged for this day.',
                     style: TextStyle(color: AppColors.textMuted, fontSize: 12)))
               else
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: _entries.length,
-                    itemBuilder: (_, i) => _CandleCard(entry: _entries[i]),
-                  ),
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _entries.length,
+                  itemBuilder: (_, i) => _CandleCard(entry: _entries[i]),
                 ),
-
               const SizedBox(height: 8),
               Row(children: [
                 Expanded(child: OutlinedButton(
@@ -226,14 +228,15 @@ class _JournalPageState extends State<JournalPage> {
                   },
                 ),
               ),
-            ]),
+            ],
           ),
-        )
-      else
+        ),
+      ] else ...[
         const Padding(
           padding: EdgeInsets.only(top: 40),
           child: Center(child: Text('Tap a day to view candles',
               style: TextStyle(color: AppColors.textMuted, fontSize: 12)))),
+      ],
     ]),
     );
   }
