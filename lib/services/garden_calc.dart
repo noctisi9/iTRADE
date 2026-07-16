@@ -238,7 +238,6 @@ class GardenState {
 // Summary line for signals page chart
 // ─────────────────────────────────────────────────────────────────────────────
 String buildSummaryLine(GardenResult g, String asset) {
-  final type   = assetType(asset);
   final spikes = '${g.candlesSinceSpike} candles since spike';
   final risk   = 'Score ${g.score}/100';
   final sig    = g.armed ? ' · ${g.signal}' : '';

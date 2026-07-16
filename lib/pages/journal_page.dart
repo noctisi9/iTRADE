@@ -234,7 +234,8 @@ class _JournalPageState extends State<JournalPage> {
           padding: EdgeInsets.only(top: 40),
           child: Center(child: Text('Tap a day to view candles',
               style: TextStyle(color: AppColors.textMuted, fontSize: 12)))),
-    ]);
+    ]),
+    );
   }
 
   Color _riskColor(int p) =>

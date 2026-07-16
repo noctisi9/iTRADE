@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'app_shell.dart';
 import 'services/background_service.dart';
 import 'services/deriv_feed.dart';
