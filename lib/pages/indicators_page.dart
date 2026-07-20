@@ -10,15 +10,14 @@ import '../widgets/radial_node.dart';
 import '../widgets/particle_layer.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Garden of Swords — Indicators Page v4
+// Garden of Swords — Indicators Page v5
 //
-// 3-node Sharingan tomoe layout:
-//   TOP          → AO   (value + ▲RISING / ▼FALLING)
-//   BOTTOM-RIGHT → STOCH (K%, level bar 0–100, OVERBOUGHT/OVERSOLD/NEUTRAL,
-//                         ▲RISING / ▼FALLING)
-//   BOTTOM-LEFT  → AC   (value + ▲RISING / ▼FALLING)
+// THREE nodes at 120° Sharingan tomoe positions, each rotated by its angle:
+//   TOP          → NOX I  (value + ▲▼)
+//   BOTTOM-LEFT  → NOX II (value + ▲▼)
+//   BOTTOM-RIGHT → RISK   (HIGH 🔥 | LOW ❄)
 //
-// Data panel REMOVED per user request.
+// Stochastic completely removed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class IndicatorsPage extends StatefulWidget {
@@ -41,7 +40,7 @@ class _IndicatorsPageState extends State<IndicatorsPage>
 
   late final AnimationController _popCtrl;
   late final Animation<double>   _popAnim;
-  int _lastScore = -1;
+  int _lastRisk = -1;
 
   @override
   void initState() {
@@ -71,8 +70,8 @@ class _IndicatorsPageState extends State<IndicatorsPage>
   void _computeGarden() {
     final g = _gardenState.compute(_candles, widget.asset);
     _garden = g;
-    if (g != null && g.score != _lastScore) {
-      _lastScore = g.score;
+    if (g != null && g.riskPct != _lastRisk) {
+      _lastRisk = g.riskPct;
       _popCtrl.forward(from: 0);
     }
   }
@@ -94,10 +93,11 @@ class _IndicatorsPageState extends State<IndicatorsPage>
       backgroundColor: AppColors.bg,
       body: SafeArea(child: Column(children: [
 
-        // ── Header ──────────────────────────────────────────────────────────
+        // ── Header ──────────────────────────────────────────────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
-          child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Row(children: [
                 Text(widget.asset, style: const TextStyle(fontSize: 14,
@@ -119,18 +119,19 @@ class _IndicatorsPageState extends State<IndicatorsPage>
               Text('${_secondsToClose}s', style: TextStyle(fontSize: 13,
                   fontFamily: 'monospace', fontWeight: FontWeight.bold,
                   color: urgent ? AppColors.red : AppColors.textDim)),
-            ]),
+            ],
+          ),
         ),
 
-        // ── Radial ──────────────────────────────────────────────────────────
+        // ── Radial ──────────────────────────────────────────────────────
         Expanded(
           child: g == null
-              ? const Center(child: Text('Gathering candles…',
+              ? const Center(child: Text('Gathering data…',
                   style: TextStyle(color: AppColors.textMuted, fontSize: 13)))
               : _GardenViewport(garden: g, popAnim: _popAnim),
         ),
 
-        // ── Signal card ─────────────────────────────────────────────────────
+        // ── Signal card ─────────────────────────────────────────────────
         if (g != null) _SignalCard(garden: g),
         const SizedBox(height: 4),
       ])),
@@ -158,7 +159,8 @@ class _IndicatorsPageState extends State<IndicatorsPage>
                 child: Text(g?.dirLabel ?? 'SCANNING…',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold,
                         letterSpacing: 2,
-                        color: (g?.armed ?? false) ? Colors.white : AppColors.red)),
+                        color: (g?.armed ?? false)
+                            ? Colors.white : AppColors.red)),
               ),
             ),
           ]),
@@ -169,7 +171,7 @@ class _IndicatorsPageState extends State<IndicatorsPage>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Radial viewport — 3-node Sharingan tomoe at 120° spacing
+// Radial viewport — Sharingan 3-node at 120°, each rotated by position angle
 // ─────────────────────────────────────────────────────────────────────────────
 class _GardenViewport extends StatelessWidget {
   final GardenResult garden;
@@ -178,40 +180,34 @@ class _GardenViewport extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const sz     = 300.0;
+    const sz    = 300.0;
     const nodeSz = 88.0;
-    const half   = sz / 2;
-    const nodeH  = nodeSz / 2;
-    final g      = garden;
+    const half  = sz / 2;
+    const nodeH = nodeSz / 2;
+    final g     = garden;
 
-    // ── Node colors ───────────────────────────────────────────────────────────
-    // AO: cyan positive, red negative. Orange when bar is rising (regardless of sign)
-    final aoColor = g.aoRising
-        ? const Color(0xFFFF8C00)  // orange = bar rising
-        : g.ao < 0
-            ? const Color(0xFFFF4A4A) // red = negative and falling
-            : const Color(0xFF33D8FF); // cyan = positive and falling
+    // ── Node colors ────────────────────────────────────────────────────
+    final noxIColor = g.noxIRising
+        ? const Color(0xFFFF8C00)   // orange = rising
+        : g.noxI < 0
+            ? const Color(0xFFFF4A4A) // red = negative falling
+            : const Color(0xFF33D8FF); // cyan = positive falling
 
-    // AC: purple positive, red negative. Orange rising.
-    final acColor = g.acRising
+    final noxIIColor = g.noxIIRising
         ? const Color(0xFFFF8C00)
-        : g.ac < 0
+        : g.noxII < 0
             ? const Color(0xFFFF4A4A)
             : const Color(0xFFD763FF);
 
-    // Stoch: red overbought, green oversold, orange neutral
-    final stochColor = g.stochK > 80
+    // Risk node: red = HIGH🔥, green-teal = LOW❄
+    final riskColor = g.isHighRisk
         ? const Color(0xFFFF4A4A)
-        : g.stochK < 20
-            ? const Color(0xFF47F05F)
-            : const Color(0xFFFF8C00);
+        : const Color(0xFF00C9A7);
 
-    // ── Tomoe positions — 120° spacing, AO at top ─────────────────────────────
-    // ── Tomoe positions — 120° spacing, inner ring (60%), each node
-    // rotated by its own position angle (Sharingan spinning effect)
+    // ── Tomoe positions (60% radius, inner ring) ───────────────────────
     const radius = half * 0.60;
 
-    Offset tomoePos(double degrees) {
+    Offset pos(double degrees) {
       final rad = (degrees - 90) * math.pi / 180;
       return Offset(
         half + radius * math.cos(rad) - nodeH,
@@ -219,14 +215,19 @@ class _GardenViewport extends StatelessWidget {
       );
     }
 
-    final aoPos    = tomoePos(0);
-    final stochPos = tomoePos(120);
-    final acPos    = tomoePos(240);
+    final noxIPos  = pos(0);    // top
+    final noxIIPos = pos(240);  // bottom-left
+    final riskPos  = pos(120);  // bottom-right
 
-    Widget rotNode(double deg, Widget child) =>
+    Widget rot(double deg, Widget child) =>
         Transform.rotate(angle: deg * math.pi / 180, child: child);
-    Widget rotContent(double deg, Widget child) =>
+    Widget unrot(double deg, Widget child) =>
         Transform.rotate(angle: -deg * math.pi / 180, child: child);
+
+    // Risk ring pct — scale 0-100 risk to fill %
+    // Low risk = small fill (ring mostly empty = calm)
+    // High risk = full fill (ring full = danger)
+    final riskRingPct = g.riskPct.toDouble();
 
     return Center(
       child: SizedBox(width: sz, height: sz,
@@ -234,65 +235,65 @@ class _GardenViewport extends StatelessWidget {
 
           Positioned.fill(child: ParticleLayer(garden: g)),
 
-          // ── AO — TOP (0°) ────────────────────────────────────────────────
-          Positioned(left: aoPos.dx, top: aoPos.dy,
+          // ── NOX I — TOP (0°) ─────────────────────────────────────────
+          Positioned(left: noxIPos.dx, top: noxIPos.dy,
             child: _FloatingNode(offset: const Offset(0, -4),
-              child: rotNode(0, RadialNode(
-                size: nodeSz, color: aoColor, pct: g.aoPct,
+              child: rot(0, RadialNode(
+                size: nodeSz, color: noxIColor, pct: g.noxIPct,
                 pinAngle: _ang(nodeSz, 10, nodeH),
-                child: rotContent(0, _OscNode(
-                  label: 'AO',
-                  value: _fmtOsc(g.ao),
-                  valueColor: aoColor,
-                  trend: g.aoRising ? '▲' : '▼',
-                  trendColor: g.aoRising
-                      ? const Color(0xFFFF8C00)
-                      : const Color(0xFF888888),
+                child: unrot(0, _OscNode(
+                  label: 'NOX I',
+                  value: _fmt(g.noxI),
+                  color: noxIColor,
+                  rising: g.noxIRising,
                 )))))),
 
-          // ── STOCH — BOTTOM-RIGHT (120°) ───────────────────────────────────
-          Positioned(left: stochPos.dx, top: stochPos.dy,
-            child: _FloatingNode(offset: const Offset(4, 4),
-              child: rotNode(120, RadialNode(
-                size: nodeSz, color: stochColor, pct: g.stochK,
-                pinAngle: _ang(nodeSz, nodeH * 1.6, nodeSz - 10),
-                child: rotContent(120, _StochNode(
-                  k: g.stochK,
-                  label: g.stochLabel,
-                  labelColor: stochColor,
-                  trend: g.stochTrend,
-                )))))),
-
-          // ── AC — BOTTOM-LEFT (240°) ────────────────────────────────────────
-          Positioned(left: acPos.dx, top: acPos.dy,
+          // ── NOX II — BOTTOM-LEFT (240°) ──────────────────────────────
+          Positioned(left: noxIIPos.dx, top: noxIIPos.dy,
             child: _FloatingNode(offset: const Offset(-4, 4),
-              child: rotNode(240, RadialNode(
-                size: nodeSz, color: acColor, pct: g.acPct,
+              child: rot(240, RadialNode(
+                size: nodeSz, color: noxIIColor, pct: g.noxIIPct,
                 pinAngle: _ang(nodeSz, nodeH * 1.6, 10),
-                child: rotContent(240, _OscNode(
-                  label: 'AC',
-                  value: _fmtOsc(g.ac),
-                  valueColor: acColor,
-                  trend: g.acRising ? '▲' : '▼',
-                  trendColor: g.acRising
-                      ? const Color(0xFFFF8C00)
-                      : const Color(0xFF888888),
+                child: unrot(240, _OscNode(
+                  label: 'NOX II',
+                  value: _fmt(g.noxII),
+                  color: noxIIColor,
+                  rising: g.noxIIRising,
                 )))))),
 
-                    // ── Central score ─────────────────────────────────────────────────
-          Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-            ScaleTransition(scale: popAnim,
-              child: Text('${garden.score}',
-                style: TextStyle(fontSize: 58, fontWeight: FontWeight.w900,
-                  letterSpacing: -2,
-                  color: garden.score >= 75
-                      ? AppColors.red
-                      : garden.score >= 50
-                          ? const Color(0xFFE67E22)
-                          : AppColors.text))),
-            const Text('/ 100', style: TextStyle(fontSize: 16,
-                fontWeight: FontWeight.w500, color: AppColors.textMuted)),
-          ])),
+          // ── RISK — BOTTOM-RIGHT (120°) ───────────────────────────────
+          Positioned(left: riskPos.dx, top: riskPos.dy,
+            child: _FloatingNode(offset: const Offset(4, 4),
+              child: rot(120, RadialNode(
+                size: nodeSz, color: riskColor, pct: riskRingPct,
+                pinAngle: _ang(nodeSz, nodeH * 1.6, nodeSz - 10),
+                child: unrot(120, _RiskNode(
+                  label: g.riskLabel,
+                  color: riskColor,
+                  candlesSinceSpike: g.candlesSinceSpike,
+                )))))),
+
+          // ── Central score / risk display ──────────────────────────────
+          Center(
+            child: ScaleTransition(
+              scale: popAnim,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(g.riskLabel,
+                    style: TextStyle(
+                      fontSize: g.isHighRisk ? 22 : 24,
+                      fontWeight: FontWeight.w900,
+                      color: g.isHighRisk
+                          ? const Color(0xFFFF4A4A)
+                          : const Color(0xFF00C9A7),
+                    )),
+                const SizedBox(height: 4),
+                Text('${g.candlesSinceSpike}c since spike',
+                    style: const TextStyle(fontSize: 10,
+                        fontFamily: 'monospace',
+                        color: AppColors.textMuted)),
+              ]),
+            ),
+          ),
         ]),
       ),
     );
@@ -301,27 +302,20 @@ class _GardenViewport extends StatelessWidget {
   double _ang(double ns, double py, double px) =>
       math.atan2(py - ns / 2, px - ns / 2);
 
-  String _fmtOsc(double v) =>
+  String _fmt(double v) =>
       '${v >= 0 ? '+' : ''}${v.toStringAsFixed(v.abs() < 1 ? 4 : 3)}';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AO / AC node content
+// NOX I / NOX II node content
 // ─────────────────────────────────────────────────────────────────────────────
 class _OscNode extends StatelessWidget {
   final String label;
   final String value;
-  final Color  valueColor;
-  final String trend;       // '▲' or '▼'
-  final Color  trendColor;
-
-  const _OscNode({
-    required this.label,
-    required this.value,
-    required this.valueColor,
-    required this.trend,
-    required this.trendColor,
-  });
+  final Color  color;
+  final bool   rising;
+  const _OscNode({required this.label, required this.value,
+      required this.color, required this.rising});
 
   @override
   Widget build(BuildContext context) {
@@ -331,85 +325,41 @@ class _OscNode extends StatelessWidget {
           letterSpacing: 0.5)),
       const SizedBox(height: 2),
       Text(value, style: TextStyle(fontSize: 11,
-          fontWeight: FontWeight.w900, color: valueColor,
+          fontWeight: FontWeight.w900, color: color,
           fontFamily: 'monospace'),
           maxLines: 1, overflow: TextOverflow.ellipsis),
       const SizedBox(height: 2),
-      Text(trend, style: TextStyle(fontSize: 14,
-          fontWeight: FontWeight.bold, color: trendColor)),
+      Text(rising ? '▲' : '▼',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold,
+              color: rising ? const Color(0xFFFF8C00) : const Color(0xFF888888))),
     ]);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stochastic node content — K value, level bar, label, trend
+// RISK node content — HIGH🔥 or LOW❄
 // ─────────────────────────────────────────────────────────────────────────────
-class _StochNode extends StatelessWidget {
-  final double k;
-  final String label;      // OVERBOUGHT | OVERSOLD | NEUTRAL
-  final Color  labelColor;
-  final String trend;      // 'RISING ▲' | 'FALLING ▼' | 'FLAT'
-
-  const _StochNode({
-    required this.k,
-    required this.label,
-    required this.labelColor,
-    required this.trend,
-  });
+class _RiskNode extends StatelessWidget {
+  final String label;  // 'HIGH 🔥' | 'LOW ❄'
+  final Color  color;
+  final int    candlesSinceSpike;
+  const _RiskNode({required this.label, required this.color,
+      required this.candlesSinceSpike});
 
   @override
   Widget build(BuildContext context) {
-    // Level bar: 0–100 mapped to node width (56px usable)
-    const barW = 52.0;
-    final fillW = (k / 100).clamp(0.0, 1.0) * barW;
-
-    // Zone color for the fill
-    final fillColor = k > 80
-        ? const Color(0xFFFF4A4A)
-        : k < 20
-            ? const Color(0xFF47F05F)
-            : labelColor;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // K value
-        Text('${k.toStringAsFixed(1)}%',
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900,
-                color: labelColor, fontFamily: 'monospace')),
-        const SizedBox(height: 3),
-        // Level bar (0 → 100)
-        Stack(children: [
-          Container(width: barW, height: 5,
-              decoration: BoxDecoration(color: const Color(0xFFEEEEEE),
-                  borderRadius: BorderRadius.circular(3))),
-          Container(width: fillW, height: 5,
-              decoration: BoxDecoration(color: fillColor,
-                  borderRadius: BorderRadius.circular(3))),
-          // Overbought/oversold zone markers at 20% and 80%
-          Positioned(left: barW * 0.20 - 0.5,
-            child: Container(width: 1, height: 5,
-                color: Colors.black.withValues(alpha: 0.15))),
-          Positioned(left: barW * 0.80 - 0.5,
-            child: Container(width: 1, height: 5,
-                color: Colors.black.withValues(alpha: 0.15))),
-        ]),
-        const SizedBox(height: 3),
-        // Label
-        if (label != 'NEUTRAL')
-          Text(label == 'OVERBOUGHT' ? 'OB' : 'OS',
-              style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800,
-                  color: labelColor, letterSpacing: 0.5)),
-        // Trend
-        Text(trend.replaceAll(' ', ''),
-            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700,
-                color: trend.contains('▲')
-                    ? const Color(0xFFFF8C00)
-                    : trend.contains('▼')
-                        ? const Color(0xFF888888)
-                        : AppColors.textMuted)),
-      ]),
-    );
+    final parts = label.split(' ');
+    final word  = parts[0];   // HIGH | LOW
+    final emoji = parts.length > 1 ? parts[1] : '';
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Text(emoji, style: const TextStyle(fontSize: 18)),
+      Text(word, style: TextStyle(fontSize: 13,
+          fontWeight: FontWeight.w900, color: color, letterSpacing: 0.5)),
+      const SizedBox(height: 2),
+      Text('${candlesSinceSpike}c',
+          style: const TextStyle(fontSize: 9,
+              fontFamily: 'monospace', color: AppColors.textMuted)),
+    ]);
   }
 }
 
@@ -426,10 +376,7 @@ class _SignalCard extends StatelessWidget {
     final isSell = g.signal == 'SELL';
     final isBuy  = g.signal == 'BUY';
     final armed  = isSell || isBuy;
-
     final sigColor = armed ? AppColors.red : AppColors.textMuted;
-    final bgColor  = armed
-        ? AppColors.red.withValues(alpha: 0.06) : AppColors.cardAlt;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -437,11 +384,13 @@ class _SignalCard extends StatelessWidget {
         duration: const Duration(milliseconds: 350),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: bgColor, borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-              color: armed
-                  ? AppColors.red.withValues(alpha: 0.30) : AppColors.border)),
-        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          color: armed
+              ? AppColors.red.withValues(alpha: 0.06) : AppColors.cardAlt,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: armed
+              ? AppColors.red.withValues(alpha: 0.30) : AppColors.border)),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Row(children: [
               Icon(
@@ -454,30 +403,34 @@ class _SignalCard extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    isSell ? 'BEARISH — SELL'
-                        : isBuy ? 'BULLISH — BUY'
+                    isSell ? 'SELL SIGNAL'
+                        : isBuy ? 'BUY SIGNAL'
                         : 'SCANNING…',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold,
-                        color: sigColor, letterSpacing: 1)),
+                    style: TextStyle(fontSize: 13,
+                        fontWeight: FontWeight.bold, color: sigColor,
+                        letterSpacing: 1)),
                   Text(
-                    armed
-                        ? (g.score >= 75 ? 'High confluence — take the trade'
-                            : 'Moderate — wait for stronger alignment')
-                        : 'Waiting for full indicator alignment',
-                    style: const TextStyle(fontSize: 10,
-                        color: AppColors.textMuted)),
+                    armed ? g.riskLabel : 'Waiting for alignment',
+                    style: TextStyle(fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: armed ? (g.isHighRisk
+                            ? const Color(0xFFFF4A4A)
+                            : const Color(0xFF00C9A7))
+                            : AppColors.textMuted)),
                 ]),
             ]),
+            // Candles since spike pill
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: armed
-                    ? AppColors.red.withValues(alpha: 0.12) : AppColors.cardAlt,
+                color: AppColors.cardAlt,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: armed
-                    ? AppColors.red.withValues(alpha: 0.30) : AppColors.border)),
-              child: Text('${g.score}%', style: TextStyle(fontSize: 16,
-                  fontWeight: FontWeight.w800, color: sigColor)),
+                border: Border.all(color: AppColors.border)),
+              child: Text('${g.candlesSinceSpike}c',
+                  style: const TextStyle(fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'monospace',
+                      color: AppColors.textDim)),
             ),
           ]),
       ),
@@ -486,7 +439,7 @@ class _SignalCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Floating node wrapper
+// Floating node + helpers
 // ─────────────────────────────────────────────────────────────────────────────
 class _FloatingNode extends StatefulWidget {
   final Widget child;

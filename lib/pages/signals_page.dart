@@ -7,6 +7,7 @@ import '../services/garden_calc.dart';
 import '../services/indicators.dart';
 import '../services/journal_db.dart';
 import '../services/sound_service.dart';
+import '../services/telegram_service.dart';
 import '../theme.dart';
 import '../widgets/candle_chart.dart';
 import '../widgets/pulsing_dot.dart';
@@ -276,9 +277,18 @@ class _AssetViewState extends State<_AssetView> {
         _sessionEntry     = candles.isNotEmpty ? candles.last.c : 0;
         _sessionOpenEpoch = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
         _sessionCandles   = 0;
-        _sessionPeakScore = g.score;
+        _sessionPeakScore = g.riskPct;
         SoundService.instance.signalAlert(
             asset: widget.asset, direction: newSig);
+        final _garden = g;
+        TelegramService.instance.sendSignalOpen(
+          asset: widget.asset,
+          direction: newSig,
+          timeframe: widget.tf,
+          riskLabel: _garden.riskLabel,
+          candlesSinceSpike: _garden.candlesSinceSpike,
+          entryPrice: candles.isNotEmpty ? candles.last.c : 0,
+        );
       } else if (newSig == 'WAIT' && _activeSignal != 'WAIT') {
         // Session closed — indicators reversed before a manual close.
         // This is exactly the "signal invalidated" case: alert the user.
@@ -288,8 +298,19 @@ class _AssetViewState extends State<_AssetView> {
         _activeSignal = 'WAIT';
       } else if (newSig != 'WAIT') {
         // Session ongoing
-        _sessionPeakScore = g.score > _sessionPeakScore ? g.score : _sessionPeakScore;
+        _sessionPeakScore = g.riskPct > _sessionPeakScore ? g.riskPct : _sessionPeakScore;
         _sessionCandles++;
+        // 5-candle target reached — send Telegram alert
+        if (_sessionCandles == 5 && candles.isNotEmpty) {
+          TelegramService.instance.sendTargetReached(
+            asset: widget.asset,
+            direction: _activeSignal,
+            timeframe: widget.tf,
+            entryPrice: _sessionEntry,
+            exitPrice: candles.last.c,
+            pointMove: (candles.last.c - _sessionEntry).abs(),
+          );
+        }
       }
     }
 
@@ -320,7 +341,7 @@ class _AssetViewState extends State<_AssetView> {
       ac:        g?.ac ?? 0,
       stochK:    g?.stochK ?? 50,
       stochLabel: g?.stochLabel ?? 'NEUTRAL',
-      riskPct:   g?.score ?? 0,
+      riskPct:   g?.riskPct ?? 0,
       signal:    g?.signal ?? 'WAIT',
       candlesSinceSpike: g?.candlesSinceSpike ?? 0,
     ));
@@ -339,10 +360,12 @@ class _AssetViewState extends State<_AssetView> {
   }
 
   // ── Close signal session ───────────────────────────────────────────────────
-  void _closeSession(List<Candle> candles) {
+  void _closeSession(List<Candle> candles, {bool invalidated = false}) {
     if (_activeSignal == 'WAIT' || _sessionOpenEpoch == 0) return;
-    final exitPrice = candles.isNotEmpty ? candles.last.c : _sessionEntry;
+    final exitPrice  = candles.isNotEmpty ? candles.last.c : _sessionEntry;
     final closeEpoch = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+    final pointMove  = (exitPrice - _sessionEntry).abs();
+
     JournalDb.instance.logSession(SignalSession(
       asset: widget.asset,
       timeframe: widget.tf,
@@ -352,22 +375,31 @@ class _AssetViewState extends State<_AssetView> {
       entryPrice: _sessionEntry,
       exitPrice: exitPrice,
       candlesHeld: _sessionCandles,
-      pointMove: (exitPrice - _sessionEntry).abs(),
+      pointMove: pointMove,
       peakScore: _sessionPeakScore,
     ));
+
+    if (invalidated) {
+      TelegramService.instance.sendCloseAll(
+        asset: widget.asset,
+        direction: _activeSignal,
+        timeframe: widget.tf,
+        candlesHeld: _sessionCandles,
+      );
+    }
   }
 
   // ── Summary line ───────────────────────────────────────────────────────────
   String _summaryLine() {
     final g = _garden;
     if (g == null) return 'Gathering data…  ${_secondsToClose}s';
-    return '${buildSummaryLine(g, widget.asset)}  · ${_secondsToClose}s';
+    return '${buildSummaryLine(g)}  · ${_secondsToClose}s';
   }
 
   // ── Signal copy text — NOX❄ format ────────────────────────────────────────
   String _signalText() {
     final g     = _garden;
-    final score = g?.score ?? 0;
+    final score = g?.riskPct ?? 0;
     final sig   = g?.signal ?? 'WAIT';
     final emoji = widget.asset.startsWith('BOOM') ? '💥' : '📊';
 
@@ -499,11 +531,12 @@ class _AssetViewState extends State<_AssetView> {
                                   color: AppColors.textDim),
                             ),
                             Text(
-                              'Score ${g.score}/100',
-                              style: TextStyle(fontSize: 9,
-                                  fontFamily: 'monospace',
+                              g.riskLabel,
+                              style: TextStyle(fontSize: 10,
                                   fontWeight: FontWeight.bold,
-                                  color: _riskColor(g.score)),
+                                  color: g.isHighRisk
+                                      ? AppColors.red
+                                      : const Color(0xFF00C9A7)),
                             ),
                             if (g.armed)
                               Text(

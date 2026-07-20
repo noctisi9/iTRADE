@@ -3,218 +3,218 @@ import '../models/candle.dart';
 import 'indicators.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// garden_calc.dart — production engine v4
+// garden_calc v5 — Production engine
 //
-// Stoch(25, 5, 8)
-//   Raw %K   = (Close − LowestLow_25) / (HighestHigh_25 − LowestLow_25) × 100
-//   Slowed K = SMA(rawK, 5)
-//   %D       = SMA(slowedK, 8)
+// THREE nodes:
+//   NOX I  (top)          — was AO: SMA(hl2,5) − SMA(hl2,34)
+//   NOX II (bottom-left)  — was AC: NOX I − SMA(NOX I, 5)
+//   RISK   (bottom-right) — confluence risk: HIGH🔥 or LOW❄
 //
-// AO = SMA(hl2, 5) − SMA(hl2, 34)
-// AC = AO − SMA(AO, 5)
+// STOCHASTIC COMPLETELY REMOVED.
 //
-// Signal conditions:
-//   BOOM SELL: AO<0 AND AC<0 AND stochK<20 AND stochDescending
-//   CRASH BUY: AO>0 AND AC>0 AND stochK>80 AND stochAscending
+// Signal rule (BOOM SELL / CRASH BUY):
+//   NOX I  < 0 AND NOX II < 0 AND both ≥ 2% from zero → BOOM SELL
+//   NOX I  > 0 AND NOX II > 0 AND both ≥ 2% from zero → CRASH BUY
 //
-// Score: purely from indicator alignment (0–100)
-//   stochScore = distance from 50, 0–50 pts
-//   aoScore    = 25 if AO in correct direction
-//   acScore    = 25 if AC in correct direction
+//   The 2% buffer prevents false signals right at the zero crossing.
+//   Once fired, signal holds until GENUINE misalignment
+//   (both must return toward zero and lose alignment — not just a flicker).
 //
-// Risk meaning: LOW risk = conditions fully met (overbought/oversold + aligned)
-//               HIGH risk = waiting for alignment (conditions not met = higher
-//               uncertainty). Score 100 = fully aligned = lowest risk trade.
+// Risk curve (confluence risk %):
+//   HIGH 🔥 when risk ≥ 50%
+//   LOW  ❄  when risk < 50%
+//
+//   Risk is HIGH on both ends of the distance scale:
+//   - Just crossed zero (fragile, could flip)         → HIGH
+//   - Sweet spot (committed, not exhausted)           → LOW
+//   - Extended run (reversal anticipated)             → HIGH
+//   - Spike overdue (candles since spike very high)   → raises risk
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum AssetType { boom, crash }
 
-AssetType assetType(String asset) {
-  if (asset.startsWith('BOOM')) return AssetType.boom;
-  return AssetType.crash;
-}
+AssetType assetType(String asset) =>
+    asset.startsWith('BOOM') ? AssetType.boom : AssetType.crash;
 
 class GardenResult {
-  final double ao;
-  final bool   aoRising;
-  final double aoPct;
+  // NOX I (formerly AO)
+  final double noxI;
+  final bool   noxIRising;
+  final double noxIPct;      // distance from zero as % of recent max, 0–100
 
-  final double ac;
-  final bool   acRising;
-  final double acPct;
+  // NOX II (formerly AC)
+  final double noxII;
+  final bool   noxIIRising;
+  final double noxIIPct;
 
-  final double stochK;
-  final double stochD;
-  final bool   stochDescending;
-  final bool   stochAscending;
-  final String stochLabel;     // 'OVERBOUGHT' | 'OVERSOLD' | 'NEUTRAL'
-  // Stochastic direction context for display
-  final String stochTrend;     // 'RISING ▲' | 'FALLING ▼' | 'FLAT'
+  // Confluence risk
+  final int    riskPct;      // 0–100 internal
+  final bool   isHighRisk;   // true = HIGH🔥, false = LOW❄
+  final String riskLabel;    // 'HIGH 🔥' | 'LOW ❄'
 
-  final int    score;
-  final String signal;
+  // Candles since spike
+  final int    candlesSinceSpike;
+
+  // Signal
+  final String signal;       // 'BUY' | 'SELL' | 'WAIT'
   final String dirLabel;
   final bool   armed;
 
-  final int    candlesSinceSpike;
-
   const GardenResult({
-    required this.ao,
-    required this.aoRising,
-    required this.aoPct,
-    required this.ac,
-    required this.acRising,
-    required this.acPct,
-    required this.stochK,
-    required this.stochD,
-    required this.stochDescending,
-    required this.stochAscending,
-    required this.stochLabel,
-    required this.stochTrend,
-    required this.score,
+    required this.noxI,
+    required this.noxIRising,
+    required this.noxIPct,
+    required this.noxII,
+    required this.noxIIRising,
+    required this.noxIIPct,
+    required this.riskPct,
+    required this.isHighRisk,
+    required this.riskLabel,
+    required this.candlesSinceSpike,
     required this.signal,
     required this.dirLabel,
     required this.armed,
-    required this.candlesSinceSpike,
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GardenState — one per asset × timeframe
+// ─────────────────────────────────────────────────────────────────────────────
 class GardenState {
-  final List<double> _aoH    = [];
-  final List<double> _acH    = [];
-  final List<double> _slowKH = [];
-  double? _prevStochK;
+  final List<double> _noxIH  = [];   // running history for signal line calc
+  final List<double> _noxIIH = [];
+
+  // Previous values for rising/falling detection
+  double? _prevNoxI;
+  double? _prevNoxII;
+
+  // Signal persistence — track last confirmed signal to avoid rapid flipping
+  String _confirmedSignal = 'WAIT';
+  int    _confirmCount    = 0;       // candles the current signal has been held
+  static const _minConfirmCandles = 2; // must hold for 2 candles before firing
 
   GardenResult? compute(List<Candle> candles, String asset) {
-    // Need minimum 40 candles for stable SMA(34)
     if (candles.length < 40) return null;
     final type = assetType(asset);
 
-    // ── AO ───────────────────────────────────────────────────────────────────
+    // ── NOX I = AO = SMA(hl2,5) − SMA(hl2,34) ────────────────────────────
     final aoSeries = calcAO(candles);
     if (aoSeries.isEmpty) return null;
-    final aoRaw = aoSeries.last;
-    if (!aoRaw.isFinite) return null;
-    final ao = _r4(aoRaw);
-    final aoRising = _aoH.isNotEmpty && ao > _aoH.last;
-    _push(_aoH, ao);
+    final noxIRaw = aoSeries.last;
+    if (!noxIRaw.isFinite) return null;
+    final noxI = _r4(noxIRaw);
+    final noxIRising = _prevNoxI != null && noxI > _prevNoxI!;
+    _prevNoxI = noxI;
+    _push(_noxIH, noxI);
 
-    // ── AC ───────────────────────────────────────────────────────────────────
+    // ── NOX II = AC = NOX I − SMA(NOX I, 5) ──────────────────────────────
     final acSeries = calcAC(aoSeries);
     if (acSeries.isEmpty) return null;
-    final acRaw = acSeries.last;
-    if (!acRaw.isFinite) return null;
-    final ac = _r4(acRaw);
-    final acRising = _acH.isNotEmpty && ac > _acH.last;
-    _push(_acH, ac);
+    final noxIIRaw = acSeries.last;
+    if (!noxIIRaw.isFinite) return null;
+    final noxII = _r4(noxIIRaw);
+    final noxIIRising = _prevNoxII != null && noxII > _prevNoxII!;
+    _prevNoxII = noxII;
+    _push(_noxIIH, noxII);
 
-    // ── Stoch(25, 5, 8) ───────────────────────────────────────────────────────
-    final stochRaw = _calcStochK(candles);
-    if (stochRaw == null) return null;
-    _push(_slowKH, stochRaw);
+    // ── Distance from zero as % of recent maximum ─────────────────────────
+    final noxIPct  = _distPct(noxI,  _noxIH);
+    final noxIIPct = _distPct(noxII, _noxIIH);
 
-    // D requires 8 slowed-K values. If we don't have 8 yet, use stochRaw as D.
-    // This prevents the engine from returning null during warm-up, but keeps
-    // signal conditions accurate (descending/ascending won't fire prematurely
-    // because K≈D when D is estimated).
-    final stochK = stochRaw;
-    final stochD = _slowKH.length >= 8
-        ? _smaLast(_slowKH, 8)!
-        : stochRaw; // fallback to K itself → no false K<D or K>D
+    // ── 2% buffer: both must be ≥ 2% from zero to avoid false signals ─────
+    final noxISafe  = noxIPct  >= 2.0;
+    final noxIISafe = noxIIPct >= 2.0;
+    final bothSafe  = noxISafe && noxIISafe;
 
-    final stochDescending = stochK < stochD - 0.5; // 0.5 hysteresis to avoid noise
-    final stochAscending  = stochK > stochD + 0.5;
+    // ── Raw alignment ──────────────────────────────────────────────────────
+    final rawBoomSell  = noxI  < 0 && noxII  < 0 && bothSafe;
+    final rawCrashBuy  = noxI  > 0 && noxII  > 0 && bothSafe;
 
-    final stochLabel = stochK > 80 ? 'OVERBOUGHT'
-        : stochK < 20             ? 'OVERSOLD'
-        :                           'NEUTRAL';
-
-    // Stoch trend vs previous K
-    final String stochTrend;
-    if (_prevStochK == null) {
-      stochTrend = 'FLAT';
-    } else if (stochK > _prevStochK! + 0.3) {
-      stochTrend = 'RISING ▲';
-    } else if (stochK < _prevStochK! - 0.3) {
-      stochTrend = 'FALLING ▼';
-    } else {
-      stochTrend = 'FLAT';
-    }
-    _prevStochK = stochK;
-
-    // ── Ring fill percentages ─────────────────────────────────────────────────
-    final aoPct = _distPct(ao, _aoH);
-    final acPct = _distPct(ac, _acH);
-
-    // Relaxed safe guard — require at least a tiny move (2% of recent range)
-    // Removes false blocking during first few candles of a new session
-    final safe = aoPct > 2 && acPct > 2;
-
-    // ── Score ─────────────────────────────────────────────────────────────────
-    // Score = how aligned all indicators are toward a valid trade.
-    // Score 100 = fully aligned = low-risk high-confidence trade.
-    // Score 0   = no alignment  = do not trade.
-    //
-    // For BOOM (SELL setup): AO<0, AC<0, Stoch oversold and descending
-    // For CRASH (BUY setup): AO>0, AC>0, Stoch overbought and ascending
-    final stochScore = (stochK - 50).abs() / 50 * 50; // 0–50
-
-    final isBearish = type == AssetType.boom;  // BOOM wants bearish
-    final isBullish = type == AssetType.crash; // CRASH wants bullish
-
-    final aoScore = (isBearish && ao < 0) || (isBullish && ao > 0) ? 25.0 : 0.0;
-    final acScore = (isBearish && ac < 0) || (isBullish && ac > 0) ? 25.0 : 0.0;
-
-    final score = (stochScore + aoScore + acScore).round().clamp(0, 100);
-
-    // ── Signal ────────────────────────────────────────────────────────────────
-    final String signal;
+    // ── Signal persistence: require _minConfirmCandles consecutive candles ─
+    // before announcing a new signal. This stops rapid BUY→SELL→BUY flipping.
+    final String rawSignal;
     switch (type) {
       case AssetType.boom:
-        signal = (ao < 0 && ac < 0 && safe && stochK < 20 && stochDescending)
-            ? 'SELL' : 'WAIT';
+        rawSignal = rawBoomSell ? 'SELL' : 'WAIT';
       case AssetType.crash:
-        signal = (ao > 0 && ac > 0 && safe && stochK > 80 && stochAscending)
-            ? 'BUY' : 'WAIT';
+        rawSignal = rawCrashBuy ? 'BUY'  : 'WAIT';
     }
 
+    if (rawSignal == _confirmedSignal && rawSignal != 'WAIT') {
+      // Continuing same signal — increment hold count
+      _confirmCount++;
+    } else if (rawSignal != 'WAIT' && rawSignal != _confirmedSignal) {
+      // New potential signal — start confirmation count from 1
+      if (_confirmCount >= _minConfirmCandles ||
+          _confirmedSignal == 'WAIT') {
+        // Previous signal was held long enough — accept new one
+        _confirmedSignal = rawSignal;
+        _confirmCount    = 1;
+      } else {
+        // Too early — don't flip yet, keep previous
+        _confirmCount = 0;
+      }
+    } else {
+      // rawSignal = WAIT = misalignment confirmed
+      _confirmedSignal = 'WAIT';
+      _confirmCount    = 0;
+    }
+
+    final signal   = _confirmedSignal;
     final armed    = signal != 'WAIT';
     final dirLabel = signal == 'SELL' ? 'SELL · SIGNAL'
         : signal == 'BUY' ? 'BUY · SIGNAL'
         : 'SCANNING…';
 
+    // ── Candles since spike ────────────────────────────────────────────────
     final candlesSinceSpike = calcSpikeStats(candles)?.sequenceCount ?? 0;
 
+    // ── Confluence risk curve ──────────────────────────────────────────────
+    final avgDist  = (noxIPct + noxIIPct) / 2;
+    final riskPct  = _calcRisk(avgDist, candlesSinceSpike);
+    final isHigh   = riskPct >= 50;
+    final riskLabel = isHigh ? 'HIGH 🔥' : 'LOW ❄';
+
     return GardenResult(
-      ao: ao, aoRising: aoRising, aoPct: aoPct,
-      ac: ac, acRising: acRising, acPct: acPct,
-      stochK: stochK, stochD: stochD,
-      stochDescending: stochDescending, stochAscending: stochAscending,
-      stochLabel: stochLabel, stochTrend: stochTrend,
-      score: score,
-      signal: signal, dirLabel: dirLabel, armed: armed,
+      noxI: noxI, noxIRising: noxIRising, noxIPct: noxIPct,
+      noxII: noxII, noxIIRising: noxIIRising, noxIIPct: noxIIPct,
+      riskPct: riskPct, isHighRisk: isHigh, riskLabel: riskLabel,
       candlesSinceSpike: candlesSinceSpike,
+      signal: signal, dirLabel: dirLabel, armed: armed,
     );
   }
 
-  // ── Stoch(25, slowing=5) — returns slowed K ───────────────────────────────
-  double? _calcStochK(List<Candle> candles) {
-    const kPeriod = 25, slowing = 5;
-    const need = kPeriod + slowing - 1;
-    if (candles.length < need) return null;
-    final slice = candles.sublist(candles.length - need);
-    final rawKs = <double>[];
-    for (var i = kPeriod - 1; i < slice.length; i++) {
-      final w  = slice.sublist(i - kPeriod + 1, i + 1);
-      final hi = w.map((c) => c.h).reduce(math.max);
-      final lo = w.map((c) => c.l).reduce(math.min);
-      rawKs.add(hi == lo ? 50.0 : ((slice[i].c - lo) / (hi - lo)) * 100.0);
+  // ── Confluence risk curve ─────────────────────────────────────────────────
+  // HIGH on both ends, LOW in the sweet spot (40–60% from zero)
+  int _calcRisk(double distPct, int candlesSinceSpike) {
+    double base;
+    if (distPct < 15) {
+      // Just crossed zero — fragile, could flip back
+      base = 90 - (distPct / 15) * 20;        // 90 → 70
+    } else if (distPct < 45) {
+      // Building conviction
+      base = 70 - ((distPct - 15) / 30) * 60; // 70 → 10
+    } else if (distPct < 55) {
+      // Sweet spot — committed momentum
+      base = 10 - ((distPct - 45) / 10) * 5;  // 10 → 5
+    } else if (distPct < 75) {
+      // Extended run — reversal building
+      base = 5 + ((distPct - 55) / 20) * 50;  // 5 → 55
+    } else {
+      // Exhaustion — reversal expected
+      base = 55 + ((distPct - 75) / 25) * 35; // 55 → 90
     }
-    if (rawKs.length < slowing) return null;
-    return rawKs.sublist(rawKs.length - slowing)
-        .fold(0.0, (a, b) => a + b) / slowing;
+
+    // Spike timing modifier
+    final spikeAdj = candlesSinceSpike < 20  ? -5
+        : candlesSinceSpike < 50             ?  0
+        : candlesSinceSpike < 100            ? 10
+        :                                      20;
+
+    return (base + spikeAdj).round().clamp(2, 98);
   }
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
   void _push(List<double> list, double val) {
     list.add(val);
     if (list.length > 500) list.removeAt(0);
@@ -226,20 +226,15 @@ class GardenState {
     return mx == 0 ? 0 : math.min(100.0, val.abs() / mx * 100.0);
   }
 
-  double? _smaLast(List<double> vals, int n) {
-    if (vals.length < n) return null;
-    return vals.sublist(vals.length - n).fold(0.0, (a, b) => a + b) / n;
-  }
-
   double _r4(double v) => double.parse(v.toStringAsFixed(4));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Summary line for signals page chart
+// Summary line for signals page
 // ─────────────────────────────────────────────────────────────────────────────
-String buildSummaryLine(GardenResult g, String asset) {
-  final spikes = '${g.candlesSinceSpike} candles since spike';
-  final risk   = 'Score ${g.score}/100';
-  final sig    = g.armed ? ' · ${g.signal}' : '';
-  return '$spikes  ·  $risk$sig';
+String buildSummaryLine(GardenResult g) {
+  final spike = '${g.candlesSinceSpike}c since spike';
+  final risk  = g.riskLabel;
+  final sig   = g.armed ? '  ·  ${g.signal}' : '';
+  return '$spike  ·  $risk$sig';
 }
