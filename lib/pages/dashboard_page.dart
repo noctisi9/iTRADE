@@ -123,7 +123,7 @@ class _DashboardCellState extends State<_DashboardCell> {
           if (g == null)
             const Text('…', style: TextStyle(color: AppColors.textMuted, fontSize: 11))
           else ...[
-            Text('${g.score}',
+            Text('${g.riskLabel}',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900,
                     fontFamily: 'monospace', color: _statusColor)),
             const SizedBox(width: 6),
@@ -145,3 +145,4 @@ class _DashboardCellState extends State<_DashboardCell> {
     );
   }
 }
+

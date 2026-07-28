@@ -280,13 +280,13 @@ class _AssetViewState extends State<_AssetView> {
         _sessionPeakScore = g.riskPct;
         SoundService.instance.signalAlert(
             asset: widget.asset, direction: newSig);
-        final _garden = g;
+        
         TelegramService.instance.sendSignalOpen(
           asset: widget.asset,
           direction: newSig,
           timeframe: widget.tf,
-          riskLabel: _garden.riskLabel,
-          candlesSinceSpike: _garden.candlesSinceSpike,
+          riskLabel: g.riskLabel,
+          candlesSinceSpike: g.candlesSinceSpike,
           entryPrice: candles.isNotEmpty ? candles.last.c : 0,
         );
       } else if (newSig == 'WAIT' && _activeSignal != 'WAIT') {
@@ -337,8 +337,8 @@ class _AssetViewState extends State<_AssetView> {
       open: c.o, high: c.h, low: c.l, close: c.c,
       movement: c.c - c.o,
       spike: c.spike,
-      ao:        g?.ao ?? 0,
-      ac:        g?.ac ?? 0,
+      ao:        g?.noxI ?? 0,
+      ac:        g?.noxII ?? 0,
       stochK:    g?.stochK ?? 50,
       stochLabel: g?.stochLabel ?? 'NEUTRAL',
       riskPct:   g?.riskPct ?? 0,
@@ -589,3 +589,4 @@ class _AssetViewState extends State<_AssetView> {
     );
   }
 }
+
