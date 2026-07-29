@@ -68,10 +68,20 @@ class DerivFeed {
     return ctrl.stream;
   }
 
-  /// Pre-warm ALL assets × all timeframes on launch.
-  /// Loads SQLite cache for every symbol immediately so indicators are live
-  /// from the first frame regardless of which asset the user opens.
-  /// Staggered so first asset is instant, others load in background.
+  /// Pre-warm ALL assets × all timeframes on launch — SQLite only.
+  /// Loads cached candles from disk for every symbol immediately so
+  /// whichever asset the user opens first shows data instantly.
+  ///
+  /// Deliberately does NOT open live WebSocket subscriptions here. An
+  /// earlier version of this function also eagerly subscribed to all
+  /// 30 asset×timeframe combos on startup — since a fresh install has
+  /// no SQLite cache yet, that meant 30 simultaneous full 5000-candle
+  /// requests fired only 200ms apart, which hits Deriv's public rate
+  /// limit and stalls every connection, including whichever asset the
+  /// user is actually looking at. Live subscriptions stay lazy: they
+  /// happen through stream() as each asset/timeframe is actually opened,
+  /// which already staggers first-time (cold) fetches via the cold-fetch
+  /// queue below — exactly what avoids this problem.
   Future<void> preWarmAll(List<String> assets) async {
     for (final asset in assets) {
       final symbol = _assetSymbol(asset);
@@ -89,20 +99,7 @@ class DerivFeed {
           }
         } catch (_) {}
         // Small pause between assets to avoid SQLite contention
-        await Future.delayed(const Duration(milliseconds: 50));
-      }
-    }
-    // After all caches loaded, trigger live subscriptions for all
-    for (final asset in assets) {
-      final symbol = _assetSymbol(asset);
-      for (final tf in kGranularities.keys) {
-        _requested.putIfAbsent(tf, () => {});
-        if (!_requested[tf]!.contains(symbol)) {
-          _requested[tf]!.add(symbol);
-          _ensureConnected(tf);
-          _subscribe(symbol, tf);
-          await Future.delayed(const Duration(milliseconds: 200));
-        }
+        await Future.delayed(const Duration(milliseconds: 30));
       }
     }
   }
@@ -271,6 +268,25 @@ class DerivFeed {
     try {
       data = jsonDecode(raw as String) as Map<String, dynamic>;
     } catch (_) {
+      return;
+    }
+
+    if (data['error'] != null) {
+      // Deriv rejected this request (e.g. rate limit). Without this, a
+      // throttled request just vanishes and the UI hangs on "Connecting…"
+      // forever. Retry the same symbol/timeframe after a short backoff.
+      final reqId = data['req_id'] as int?;
+      final key   = reqId != null ? _reqToKey[reqId] : null;
+      if (key != null) {
+        final sep    = key.lastIndexOf('_');
+        final symbol = key.substring(0, sep);
+        final keyTf  = key.substring(sep + 1);
+        Timer(const Duration(seconds: 3), () {
+          if ((_requested[keyTf] ?? {}).contains(symbol)) {
+            _subscribe(symbol, keyTf);
+          }
+        });
+      }
       return;
     }
 
