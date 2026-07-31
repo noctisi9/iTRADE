@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'app_shell.dart';
 import 'services/background_service.dart';
-import 'services/deriv_feed.dart';
 import 'services/journal_db.dart';
 import 'services/sound_service.dart';
 import 'theme.dart';
@@ -35,14 +34,6 @@ void main() async {
     // Background service unavailable (battery optimization forced stop,
     // or device restriction) — app continues in foreground-only mode
   }
-
-  // Pre-warm ALL assets from SQLite BEFORE showing any UI.
-  // This is what eliminates the "Gathering candles..." delay.
-  // loadCandles() reads from SQLite — no network call, completes in <100ms
-  // per asset on any modern device.
-  // unawaited intentionally — we don't block the UI for WebSocket connects,
-  // but SQLite warm-up is synchronous within preWarmAll before live subs.
-  DerivFeed.instance.preWarmAll(kAssets);
 
   runApp(const NoctisApp());
 }

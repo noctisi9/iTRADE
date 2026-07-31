@@ -447,6 +447,29 @@ class JournalDb {
     )).toList();
   }
 
+  /// Loads a page of candles strictly older than [beforeEpoch] — used by
+  /// the Backtest rewind chart to load more history as the user scrolls
+  /// back, instead of loading everything up front. Purely local SQLite,
+  /// so this never touches the network or Deriv's rate limit. Returns
+  /// oldest→newest, capped at [limit]; empty list means no older data
+  /// is cached (the rewind has hit the edge of what's been recorded).
+  Future<List<Candle>> loadCandlesBefore(
+      String asset, String tf, int beforeEpoch, {int limit = 300}) async {
+    final db = await _open();
+    final rows = await db.query('candles',
+        where: 'asset=? AND timeframe=? AND epoch<?',
+        whereArgs: [asset, tf, beforeEpoch],
+        orderBy: 'epoch DESC', limit: limit);
+    return rows.reversed.map((r) => Candle(
+      epoch: r['epoch'] as int,
+      o: (r['o'] as num).toDouble(),
+      h: (r['h'] as num).toDouble(),
+      l: (r['l'] as num).toDouble(),
+      c: (r['c'] as num).toDouble(),
+      spike: ((r['spike'] as int?) ?? 0) == 1,
+    )).toList();
+  }
+
   /// Last stored candle epoch for gap-fill on reconnect/relaunch.
   /// Null means no cache yet — caller should do a full 5000-candle fetch.
   Future<int?> lastCandleEpoch(String asset, String tf) async {

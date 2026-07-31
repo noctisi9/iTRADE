@@ -1,20 +1,27 @@
 import 'package:flutter/material.dart';
 import '../models/candle.dart';
 import '../services/deriv_feed.dart';
-import '../services/garden_calc.dart';
-import '../services/indicators.dart';
 import '../services/journal_db.dart';
 import '../theme.dart';
+import '../widgets/candle_chart.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BacktestPage
-// Automated backtesting: replays the garden engine candle-by-candle over
-// everything cached in SQLite for the chosen asset/timeframe, and reports
-// how the signals that fired actually would have played out N candles later
-// (using the same "5 candles forward" convention as the live signal text).
+// BacktestPage — rewind chart
 //
-// This is the automated variant — it runs the whole history and reports
-// statistics, rather than manually scrolling through candles.
+// Same candlestick chart as the main Signals page, sourced entirely from
+// SQLite instead of the live feed — so this page never touches the network
+// and can never hit Deriv's rate limit. Pinch-zoom and pan (already built
+// into CandleChart) let you scrub back through history, TradingView-style.
+//
+// History loads lazily: it starts with the most recent ~300 candles, and
+// as you pan back near the oldest one currently loaded, the next page is
+// pulled from SQLite and prepended automatically. This avoids ever asking
+// for "everything" in one shot.
+//
+// Data only exists here once it's been seen on the live Signals page —
+// every candle that arrives live gets written to SQLite in the background,
+// which is what this page reads from. A freshly installed app (or an
+// asset you've never opened live) has nothing to rewind through yet.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class BacktestPage extends StatefulWidget {
@@ -24,235 +31,178 @@ class BacktestPage extends StatefulWidget {
   State<BacktestPage> createState() => _BacktestPageState();
 }
 
-class _BacktestResult {
-  final int totalSignals;
-  final int wins;
-  final int losses;
-  final double avgPointsWin;
-  final double avgPointsLoss;
-  final int candlesAnalyzed;
-  const _BacktestResult({
-    required this.totalSignals, required this.wins, required this.losses,
-    required this.avgPointsWin, required this.avgPointsLoss,
-    required this.candlesAnalyzed,
-  });
-  double get winRate => totalSignals == 0 ? 0 : wins / totalSignals * 100;
-}
-
 class _BacktestPageState extends State<BacktestPage> {
   String _asset = kAssets.first;
   String _tf    = '1m';
-  int    _forwardCandles = 5;
-  bool   _running = false;
-  _BacktestResult? _result;
-  String? _error;
 
-  Future<void> _run() async {
-    setState(() { _running = true; _result = null; _error = null; });
+  List<Candle> _candles = [];
+  bool _loading   = true;
+  bool _loadingMore = false;
+  bool _noMoreHistory = false;
 
-    try {
-      // Pull everything cached for this asset/timeframe. Falls back to
-      // whatever's live in memory if SQLite has nothing yet.
-      var candles = await JournalDb.instance.loadCandles(_asset, _tf, limit: 5000);
-      if (candles.isEmpty) {
-        final symbol = assetSymbol[_asset]!;
-        candles = DerivFeed.instance.current(symbol, _tf);
-      }
-
-      if (candles.length < 60) {
-        setState(() {
-          _running = false;
-          _error = 'Not enough cached history yet (${candles.length} candles). '
-              'Leave the app open on this asset/timeframe for a while, or '
-              'wait for the 5000-candle warm-start fetch to complete, then try again.';
-        });
-        return;
-      }
-
-      final result = _replay(candles);
-      setState(() { _running = false; _result = result; });
-    } catch (e) {
-      setState(() { _running = false; _error = 'Backtest failed: $e'; });
-    }
+  @override
+  void initState() {
+    super.initState();
+    _loadInitial();
   }
 
-  _BacktestResult _replay(List<Candle> candles) {
-    final state = GardenState();
-    var prevSignal = 'WAIT';
-    var wins = 0, losses = 0;
-    final winPoints = <double>[];
-    final lossPoints = <double>[];
+  Future<void> _loadInitial() async {
+    setState(() {
+      _loading = true;
+      _noMoreHistory = false;
+      _candles = [];
+    });
+    final c = await JournalDb.instance.loadCandles(_asset, _tf, limit: 300);
+    if (!mounted) return;
+    setState(() { _candles = c; _loading = false; });
+  }
 
-    // Walk forward candle by candle, feeding progressively larger windows —
-    // exactly what "visual backtesting" would show you scrolling through,
-    // just automated and scored.
-    for (var i = 40; i < candles.length - _forwardCandles; i++) {
-      final window = candles.sublist(0, i + 1);
-      final g = state.compute(window, _asset);
-      if (g == null) continue;
-
-      if (g.signal != 'WAIT' && prevSignal == 'WAIT') {
-        // Signal just fired at this candle's close.
-        final entry = candles[i].c;
-        final future = candles[i + _forwardCandles].c;
-        final move = future - entry;
-        // BOOM=SELL only (wins on down move), CRASH=BUY only (wins on up move)
-        final favorable = g.signal == 'SELL' ? move < 0 : move > 0;
-        final points = move.abs();
-        if (favorable) {
-          wins++; winPoints.add(points);
-        } else {
-          losses++; lossPoints.add(points);
-        }
+  Future<void> _loadOlder() async {
+    if (_loadingMore || _noMoreHistory || _candles.isEmpty) return;
+    setState(() => _loadingMore = true);
+    final older = await JournalDb.instance.loadCandlesBefore(
+        _asset, _tf, _candles.first.epoch, limit: 300);
+    if (!mounted) return;
+    setState(() {
+      _loadingMore = false;
+      if (older.isEmpty) {
+        _noMoreHistory = true;
+      } else {
+        _candles = [...older, ..._candles];
       }
-      prevSignal = g.signal;
-    }
+    });
+  }
 
-    return _BacktestResult(
-      totalSignals: wins + losses,
-      wins: wins,
-      losses: losses,
-      avgPointsWin: winPoints.isEmpty ? 0 : winPoints.reduce((a, b) => a + b) / winPoints.length,
-      avgPointsLoss: lossPoints.isEmpty ? 0 : lossPoints.reduce((a, b) => a + b) / lossPoints.length,
-      candlesAnalyzed: candles.length,
-    );
+  void _pickAsset(String a) {
+    setState(() => _asset = a);
+    _loadInitial();
+  }
+
+  void _pickTf(String tf) {
+    setState(() => _tf = tf);
+    _loadInitial();
   }
 
   @override
   Widget build(BuildContext context) {
-    final r = _result;
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bg,
         foregroundColor: AppColors.text,
         elevation: 0,
-        title: const Text('Backtest', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+        title: const Text('Backtest — Rewind',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
       ),
       body: SafeArea(
-        child: ListView(padding: const EdgeInsets.all(16), children: [
+        child: Column(children: [
           // ── Asset selector ──
-          const Text('Asset', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
-          const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 6, children: kAssets.map((a) {
-            final active = a == _asset;
-            return GestureDetector(
-              onTap: () => setState(() => _asset = a),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: active ? AppColors.red : AppColors.cardAlt,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: active ? AppColors.red : AppColors.border),
-                ),
-                child: Text(shortAssetLabel(a), style: TextStyle(fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: active ? Colors.white : AppColors.textDim)),
-              ),
-            );
-          }).toList()),
-          const SizedBox(height: 16),
+          SizedBox(
+            height: 40,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: kAssets.map((a) {
+                final active = a == _asset;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: GestureDetector(
+                    onTap: () => _pickAsset(a),
+                    child: Container(
+                      alignment: Alignment.center,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      decoration: BoxDecoration(
+                        color: active ? AppColors.red : AppColors.cardAlt,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                            color: active ? AppColors.red : AppColors.border),
+                      ),
+                      child: Text(shortAssetLabel(a),
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold,
+                              color: active ? Colors.white : AppColors.textDim)),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 8),
 
           // ── Timeframe selector ──
-          const Text('Timeframe', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
-          const SizedBox(height: 6),
-          Row(children: kGranularities.keys.map((tf) {
-            final active = tf == _tf;
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: GestureDetector(
-                onTap: () => setState(() => _tf = tf),
+          Row(mainAxisAlignment: MainAxisAlignment.center,
+            children: kGranularities.keys.map((tf) {
+              final active = tf == _tf;
+              return GestureDetector(
+                onTap: () => _pickTf(tf),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
                   decoration: BoxDecoration(
                     color: active ? AppColors.red : AppColors.cardAlt,
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: active ? AppColors.red : AppColors.border),
                   ),
-                  child: Text(tf, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold,
+                  child: Text(tf, style: TextStyle(fontSize: 12,
+                      fontWeight: FontWeight.bold, letterSpacing: 1.4,
                       color: active ? Colors.white : AppColors.textDim)),
                 ),
-              ),
-            );
-          }).toList()),
-          const SizedBox(height: 16),
+              );
+            }).toList()),
+          const SizedBox(height: 10),
 
-          // ── Forward window ──
-          Row(children: [
-            const Text('Check outcome after: ',
-                style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
-            DropdownButton<int>(
-              value: _forwardCandles,
-              items: const [3, 5, 10, 20].map((n) =>
-                  DropdownMenuItem(value: n, child: Text('$n candles'))).toList(),
-              onChanged: (v) => setState(() => _forwardCandles = v ?? 5),
-            ),
-          ]),
-          const SizedBox(height: 20),
-
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _running ? null : _run,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.red, foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          // ── Chart ──
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  decoration: BoxDecoration(
+                      color: AppColors.card,
+                      border: Border.all(color: AppColors.border)),
+                  child: _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : _candles.isEmpty
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Text(
+                                  'No cached history for $_asset · $_tf yet.\n\n'
+                                  'Open this asset on the main Signals page first — '
+                                  'every live candle gets saved automatically, and '
+                                  'you\'ll be able to rewind through it here.',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                      color: AppColors.textMuted, fontSize: 12, height: 1.5),
+                                ),
+                              ),
+                            )
+                          : CandleChart(
+                              candles: _candles,
+                              onNearStart: _loadOlder,
+                            ),
+                ),
               ),
-              child: Text(_running ? 'RUNNING…' : 'RUN BACKTEST',
-                  style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 10),
 
-          if (_error != null)
-            Text(_error!, style: const TextStyle(color: AppColors.red, fontSize: 12)),
-
-          if (r != null) Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppColors.cardAlt,
-              border: Border.all(color: AppColors.border),
-              borderRadius: BorderRadius.circular(12),
+          // ── Status line ──
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              _loadingMore
+                  ? 'Loading older candles…'
+                  : _candles.isEmpty
+                      ? ' '
+                      : _noMoreHistory
+                          ? '${_candles.length} candles loaded · start of history'
+                          : '${_candles.length} candles loaded · pan left to load more',
+              style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
             ),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('$_asset · $_tf · ${r.candlesAnalyzed} candles analyzed',
-                  style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
-              const SizedBox(height: 12),
-              _statRow('Total signals fired', '${r.totalSignals}'),
-              _statRow('Wins', '${r.wins}', color: const Color(0xFF27AE60)),
-              _statRow('Losses', '${r.losses}', color: AppColors.red),
-              _statRow('Win rate', '${r.winRate.toStringAsFixed(1)}%', big: true),
-              const Divider(height: 24, color: AppColors.border),
-              _statRow('Avg points on wins', r.avgPointsWin.toStringAsFixed(2)),
-              _statRow('Avg points on losses', r.avgPointsLoss.toStringAsFixed(2)),
-            ]),
-          ),
-
-          const SizedBox(height: 16),
-          const Text(
-            'This replays the exact live signal engine over cached candle '
-            'history — the same AO/AC/Stoch counter-spike logic used on the '
-            'Signals page, checked candle-by-candle. More cached history '
-            'gives a more reliable result; the warm-start fetch builds this '
-            'up automatically the longer you use the app.',
-            style: TextStyle(color: AppColors.textMuted, fontSize: 11, height: 1.4),
           ),
         ]),
       ),
-    );
-  }
-
-  Widget _statRow(String label, String value, {Color? color, bool big = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(label, style: const TextStyle(color: AppColors.textDim, fontSize: 13)),
-        Text(value, style: TextStyle(
-            color: color ?? AppColors.text,
-            fontWeight: FontWeight.w900,
-            fontSize: big ? 20 : 14)),
-      ]),
     );
   }
 }

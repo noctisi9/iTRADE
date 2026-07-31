@@ -11,10 +11,8 @@ const Map<String, int> kGranularities = {
   '15m': 900,
 };
 
-// In-memory rolling window. Raised from 300 → 5000 so the app holds full
-// history in RAM (matches the SQLite cache) instead of only the last hour
-// or so. ~5000 candles × 10 assets × 3 timeframes is still only a few MB.
-const int _maxCandles = 5000;
+// In-memory rolling window — same as the original working version.
+const int _maxCandles = 300;
 
 /// Key: 'SYMBOL_TF' e.g. 'BOOM1000_1m'
 String feedKey(String symbol, String tf) => '${symbol}_$tf';
@@ -47,10 +45,6 @@ class DerivFeed {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
-  // Track which keys have already been warm-started, so repeat stream()
-  // calls don't reload from disk.
-  final Set<String> _warmed = {};
-
   Stream<List<Candle>> stream(String symbol, String tf) {
     final key  = feedKey(symbol, tf);
     final ctrl = _controllers.putIfAbsent(
@@ -59,116 +53,14 @@ class DerivFeed {
     _requested.putIfAbsent(tf, () => {});
     if (!_requested[tf]!.contains(symbol)) {
       _requested[tf]!.add(symbol);
-      _warmStartThenSubscribe(symbol, tf, key);
+      _ensureConnected(tf);
+      _subscribe(symbol, tf);
     } else {
       _ensureConnected(tf);
       final c = _candles[key];
       if (c != null) scheduleMicrotask(() => ctrl.add(List.unmodifiable(c)));
     }
     return ctrl.stream;
-  }
-
-  /// Pre-warm ALL assets × all timeframes on launch — SQLite only.
-  /// Loads cached candles from disk for every symbol immediately so
-  /// whichever asset the user opens first shows data instantly.
-  ///
-  /// Deliberately does NOT open live WebSocket subscriptions here. An
-  /// earlier version of this function also eagerly subscribed to all
-  /// 30 asset×timeframe combos on startup — since a fresh install has
-  /// no SQLite cache yet, that meant 30 simultaneous full 5000-candle
-  /// requests fired only 200ms apart, which hits Deriv's public rate
-  /// limit and stalls every connection, including whichever asset the
-  /// user is actually looking at. Live subscriptions stay lazy: they
-  /// happen through stream() as each asset/timeframe is actually opened,
-  /// which already staggers first-time (cold) fetches via the cold-fetch
-  /// queue below — exactly what avoids this problem.
-  Future<void> preWarmAll(List<String> assets) async {
-    for (final asset in assets) {
-      final symbol = _assetSymbol(asset);
-      for (final tf in kGranularities.keys) {
-        final key = feedKey(symbol, tf);
-        if (_warmed.contains(key)) continue;
-        _warmed.add(key);
-        try {
-          final cached = await JournalDb.instance.loadCandles(
-              symbol, tf, limit: _maxCandles);
-          if (cached.isNotEmpty) {
-            _candles[key] = _markSpikes(symbol, cached);
-            _lastEpoch[key] = cached.last.epoch;
-            _emit(key);
-          }
-        } catch (_) {}
-        // Small pause between assets to avoid SQLite contention
-        await Future.delayed(const Duration(milliseconds: 30));
-      }
-    }
-  }
-
-  String _assetSymbol(String asset) {
-    // Deriv WebSocket symbol = display name for BOOM/CRASH
-    // (no VIX anymore — all assets are BOOM/CRASH variants)
-    return asset;
-  }
-
-  /// Loads any cached candles from SQLite first (near-instant, no network
-  /// wait), emits them immediately, seeds _lastEpoch so the live subscribe
-  /// gap-fills from exactly where we left off, then connects the WebSocket.
-  /// If there's no cache at all, requests the full 5000-candle history on
-  /// first connect instead of the usual smaller window.
-  Future<void> _warmStartThenSubscribe(String symbol, String tf, String key) async {
-    if (_warmed.contains(key)) {
-      _ensureConnected(tf);
-      _subscribe(symbol, tf);
-      return;
-    }
-    _warmed.add(key);
-
-    var isFirstEverFetch = true;
-    try {
-      final cached = await JournalDb.instance.loadCandles(symbol, tf, limit: _maxCandles);
-      if (cached.isNotEmpty) {
-        isFirstEverFetch = false;
-        _candles[key] = _markSpikes(symbol, cached);
-        _lastEpoch[key] = cached.last.epoch;
-        _emit(key);
-      }
-    } catch (_) {
-      // SQLite unavailable (e.g. first run before DB init) — fall through
-      // to a normal live fetch, no warm start this time.
-    }
-
-    _ensureConnected(tf);
-    if (isFirstEverFetch) {
-      // No cache yet — this will be a full 5000-candle fetch, which is the
-      // expensive request. Stagger these so requesting many assets at once
-      // (e.g. opening the multi-asset dashboard) doesn't fire them all
-      // simultaneously and risk Deriv's rate limit.
-      _enqueueColdFetch(() => _subscribe(symbol, tf));
-    } else {
-      // Cache exists — this is just a small gap-fill delta, safe to fire
-      // immediately regardless of how many other symbols are loading.
-      _subscribe(symbol, tf);
-    }
-  }
-
-  // ── Cold-fetch stagger queue ─────────────────────────────────────────────
-  final List<void Function()> _coldFetchQueue = [];
-  bool _coldFetchRunning = false;
-
-  void _enqueueColdFetch(void Function() job) {
-    _coldFetchQueue.add(job);
-    _drainColdQueue();
-  }
-
-  void _drainColdQueue() {
-    if (_coldFetchRunning || _coldFetchQueue.isEmpty) return;
-    _coldFetchRunning = true;
-    final job = _coldFetchQueue.removeAt(0);
-    job();
-    Timer(const Duration(milliseconds: 400), () {
-      _coldFetchRunning = false;
-      _drainColdQueue();
-    });
   }
 
   List<Candle> current(String symbol, String tf) =>

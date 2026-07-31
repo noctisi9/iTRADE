@@ -5,7 +5,8 @@ import '../theme.dart';
 
 class CandleChart extends StatefulWidget {
   final List<Candle> candles;
-  const CandleChart({super.key, required this.candles});
+  final VoidCallback? onNearStart; // fired when panning close to oldest loaded candle
+  const CandleChart({super.key, required this.candles, this.onNearStart});
 
   @override
   State<CandleChart> createState() => _CandleChartState();
@@ -18,6 +19,7 @@ class _CandleChartState extends State<CandleChart> {
   double _startOffset = 0;
   Offset _startFocal = Offset.zero;
   double _lastWidth = 300;
+  bool _nearStartFired = false;
 
   @override
   void didUpdateWidget(covariant CandleChart oldWidget) {
@@ -26,6 +28,11 @@ class _CandleChartState extends State<CandleChart> {
     // appears and the user isn't actively panned away from live.
     if (widget.candles.length > oldWidget.candles.length && _offset == 0) {
       // already at live edge, nothing to do — new candle just shows.
+    }
+    // More history just arrived (e.g. lazy-load completed) — allow the
+    // near-start callback to fire again once the user reaches the new edge.
+    if (widget.candles.length != oldWidget.candles.length) {
+      _nearStartFired = false;
     }
   }
 
@@ -47,6 +54,17 @@ class _CandleChartState extends State<CandleChart> {
       final maxOff = math.max(0.0, widget.candles.length - _viewW);
       _offset = (_startOffset + candleDelta).clamp(0.0, maxOff);
     });
+
+    // Notify the parent once when the user pans within one screen-width of
+    // the oldest candle currently loaded, so it can fetch an older page
+    // (e.g. from SQLite) and append before the user actually hits the wall.
+    if (widget.onNearStart != null && !_nearStartFired) {
+      final maxOff = math.max(0.0, widget.candles.length - _viewW);
+      if (maxOff > 0 && _offset >= maxOff - _viewW) {
+        _nearStartFired = true;
+        widget.onNearStart!();
+      }
+    }
   }
 
   void _resetZoom() {
