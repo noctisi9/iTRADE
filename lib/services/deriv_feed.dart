@@ -2,7 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/candle.dart';
-import 'journal_db.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deriv app_id — 1089 is Deriv's own public "default test app_id", shared by
+// every tutorial and public example on the internet. It works, but it's not
+// dedicated to this app and its behavior isn't something we control — if you
+// keep seeing connection issues that nothing in the code explains, register
+// your own free app_id at https://api.deriv.com (just needs a Deriv account,
+// takes a couple minutes) and paste it in below. Everything else stays the
+// same — this is the only line that changes.
+// ─────────────────────────────────────────────────────────────────────────────
+const String _derivAppId = '1089';
 
 // Supported timeframes in seconds
 const Map<String, int> kGranularities = {
@@ -80,7 +90,7 @@ class DerivFeed {
 
     try {
       final ch = WebSocketChannel.connect(
-          Uri.parse('wss://ws.derivws.com/websockets/v3?app_id=1089'));
+          Uri.parse('wss://ws.derivws.com/websockets/v3?app_id=$_derivAppId'));
       _channels[tf] = ch;
       _subs[tf] = ch.stream.listen(
         (raw) => _onMessage(tf, raw),
@@ -163,25 +173,6 @@ class DerivFeed {
       return;
     }
 
-    if (data['error'] != null) {
-      // Deriv rejected this request (e.g. rate limit). Without this, a
-      // throttled request just vanishes and the UI hangs on "Connecting…"
-      // forever. Retry the same symbol/timeframe after a short backoff.
-      final reqId = data['req_id'] as int?;
-      final key   = reqId != null ? _reqToKey[reqId] : null;
-      if (key != null) {
-        final sep    = key.lastIndexOf('_');
-        final symbol = key.substring(0, sep);
-        final keyTf  = key.substring(sep + 1);
-        Timer(const Duration(seconds: 3), () {
-          if ((_requested[keyTf] ?? {}).contains(symbol)) {
-            _subscribe(symbol, keyTf);
-          }
-        });
-      }
-      return;
-    }
-
     if (data['msg_type'] == 'candles') {
       final reqId = data['req_id'] as int?;
       final key   = reqId != null ? _reqToKey[reqId] : null;
@@ -223,7 +214,6 @@ class DerivFeed {
       _candles[key] = _markSpikes(symbol, list);
       _lastEpoch[key] = list.last.epoch;
       _emit(key);
-      unawaited(JournalDb.instance.saveCandles(symbol, matchedTf!, [fresh]));
     }
   }
 
@@ -252,11 +242,6 @@ class DerivFeed {
     _candles[key] = _markSpikes(symbol, existing);
     if (existing.isNotEmpty) _lastEpoch[key] = existing.last.epoch;
     _emit(key);
-
-    // Persist to SQLite — fire and forget, doesn't block the live feed.
-    // Only the newly-arrived candles need writing; existing ones are
-    // already stored (INSERT OR REPLACE handles any overlap safely).
-    unawaited(JournalDb.instance.saveCandles(symbol, tf, incoming));
 
     if (gapCandles.isNotEmpty) {
       onGapFilled?.call(key, gapCandles);

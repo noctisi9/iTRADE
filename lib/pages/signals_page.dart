@@ -226,6 +226,7 @@ class _AssetViewState extends State<_AssetView> {
   int     _sessionCandles  = 0;
   int     _sessionPeakScore = 0;
   int?    _lastLoggedEpoch;
+  bool    _savedInitialBatch = false;
 
   @override
   void initState() {
@@ -267,6 +268,21 @@ class _AssetViewState extends State<_AssetView> {
     if (!mounted) return;
     _candles = candles;
     final g = _gardenState.compute(candles, widget.asset);
+
+    // Save to SQLite for the Backtest rewind chart. Done here (UI side,
+    // after data has already safely reached the widget) rather than inside
+    // DerivFeed's WebSocket message handler — an earlier version did it
+    // there and it caused live connections to hang, so it's deliberately
+    // kept out of that path. Fire-and-forget; failure here only means a
+    // gap in Backtest history, nothing more.
+    if (candles.isNotEmpty) {
+      if (!_savedInitialBatch) {
+        _savedInitialBatch = true;
+        unawaited(JournalDb.instance.saveCandles(widget.asset, widget.tf, candles));
+      } else {
+        unawaited(JournalDb.instance.saveCandles(widget.asset, widget.tf, [candles.last]));
+      }
+    }
 
     // Signal session management
     if (g != null) {
